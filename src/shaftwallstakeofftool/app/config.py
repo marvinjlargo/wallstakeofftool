@@ -1,0 +1,17 @@
+"""Application configuration constants"""
+
+# DXF drawing defaults (in mm)
+PAGE_MARGIN_MM = 500
+VIEW_GAP_MM = 500
+TITLE_AREA_HEIGHT_MM = 1500
+PAGE_GAP_BETWEEN_SHAFTS_MM = 3000
+
+# DXF layer names
+LAYER_SHEET_FRAME = "SHEET_FRAME"
+LAYER_OUTLINE = "OUTLINE"
+LAYER_LEVEL_LINES = "LEVEL_LINES"
+LAYER_TEXT = "TEXT"
+
+# Text offsets (in mm)
+TEXT_LABEL_OFFSET_X = 50
+TEXT_GAP_ABOVE_VIEW = 100

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shaftwallstakeofftool"
+version = "0.1.0"
+description = "Shaft Walls Takeoff Tool"
+requires-python = ">=3.8"
+dependencies = [
+    "ezdxf",
+    "matplotlib",
+    "sqlalchemy",
+]
+
+[project.scripts]
+shaftwallstakeofftool = "shaftwallstakeofftool.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

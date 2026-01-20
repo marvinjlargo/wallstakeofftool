@@ -1,0 +1,163 @@
+"""Module 2: Levels + Height Definition"""
+
+from typing import Dict, Any, List, Literal, Tuple
+from ..ui.base import UI
+from ..services.units import parse_dimension_to_mm, DimFormat
+
+
+def module2_level_height_definition(ui: UI, dim_format: DimFormat) -> Dict[str, Any]:
+    """
+    Collect levels and heights between consecutive levels.
+    
+    Returns:
+        {
+            "levels": [level_name, ...],
+            "deltas_mm": [delta1, delta2, ...]  # len = N-1
+        }
+    """
+    ui.banner("Module 2 - Levels + Height Definition")
+
+    # Collect levels in order (bottom -> top)
+    levels: List[str] = []
+    ui.info("Enter levels in order from bottom to top:")
+
+    level_num = 1
+    while True:
+        level_name = ui.prompt_string(f"Level {level_num} name", allow_empty=False)
+        levels.append(level_name)
+
+        if level_num == 1:
+            ui.info(f"Bottom level: {level_name}")
+        else:
+            ui.info(f"Level {level_num}: {level_name}")
+
+        if not ui.confirm("Add more levels?", default_yes=True):
+            break
+        level_num += 1
+
+    if len(levels) < 2:
+        ui.error("Need at least 2 levels.")
+        return {"levels": [], "deltas_mm": []}
+
+    ui.info("")
+    ui.info(f"Levels entered ({len(levels)} total):")
+    for i, lv in enumerate(levels, start=1):
+        ui.info(f"  {i}) {lv}")
+
+    # Collect heights between consecutive levels
+    ui.info("")
+    ui.info("Enter height between each consecutive level pair:")
+    deltas_mm: List[float] = []
+
+    for i in range(len(levels) - 1):
+        ui.info("")
+        ui.info(f"Height from '{levels[i]}' to '{levels[i+1]}':")
+        height_text = ui.prompt_string("  Height", allow_empty=False)
+
+        try:
+            delta_mm = parse_dimension_to_mm(height_text, dim_format)
+            if delta_mm <= 0:
+                ui.error("Height must be > 0. Re-enter.")
+                continue
+            deltas_mm.append(delta_mm)
+        except ValueError as e:
+            ui.error(f"Invalid dimension: {e}")
+            ui.warn("Re-enter this height.")
+            continue
+
+    # Simple editing options
+    ui.info("")
+    if ui.confirm("Edit levels or heights?", default_yes=False):
+        levels, deltas_mm = _edit_levels_and_heights(ui, levels, deltas_mm, dim_format)
+
+    # Final summary
+    ui.info("")
+    ui.info("Module 2 complete.")
+    ui.info(f"Levels: {len(levels)}")
+    ui.info(f"Level-to-level steps: {len(deltas_mm)}")
+    for i in range(len(deltas_mm)):
+        ui.info(f"  {levels[i]} → {levels[i+1]}: {deltas_mm[i]:.2f} mm")
+
+    return {
+        "levels": levels,
+        "deltas_mm": deltas_mm,
+    }
+
+
+def _edit_levels_and_heights(ui: UI, levels: List[str], deltas_mm: List[float], dim_format: DimFormat) -> Tuple[List[str], List[float]]:
+    """Simple editing interface for levels and heights"""
+    while True:
+        ui.info("")
+        ui.info("Edit options:")
+        choice = ui.prompt_choice(
+            "What would you like to edit?",
+            [
+                "Rename a level",
+                "Insert a level",
+                "Delete a level",
+                "Edit a step height",
+                "Done editing",
+            ],
+            default_index=4,
+        )
+
+        if choice == 4:  # Done
+            break
+
+        elif choice == 0:  # Rename level
+            ui.info("Select level to rename:")
+            idx = ui.prompt_choice("Level:", levels, default_index=0)
+            new_name = ui.prompt_string("New name", default=levels[idx], allow_empty=False)
+            levels[idx] = new_name
+
+        elif choice == 1:  # Insert level
+            ui.info("Select position to insert after:")
+            idx = ui.prompt_choice("After level:", levels, default_index=0)
+            new_name = ui.prompt_string("New level name", allow_empty=False)
+            levels.insert(idx + 1, new_name)
+            # Need to add height for new step
+            height_text = ui.prompt_string(f"Height from '{levels[idx]}' to '{new_name}'", allow_empty=False)
+            try:
+                delta = parse_dimension_to_mm(height_text, dim_format)
+                if delta > 0:
+                    deltas_mm.insert(idx, delta)
+                else:
+                    ui.error("Height must be > 0. Insertion cancelled.")
+                    levels.pop(idx + 1)
+            except ValueError as e:
+                ui.error(f"Invalid dimension: {e}")
+                levels.pop(idx + 1)
+
+        elif choice == 2:  # Delete level
+            if len(levels) <= 2:
+                ui.error("Cannot delete - need at least 2 levels.")
+                continue
+            ui.info("Select level to delete:")
+            idx = ui.prompt_choice("Level:", levels, default_index=0)
+            if idx == 0:
+                # Delete bottom level - remove first step
+                deltas_mm.pop(0)
+            elif idx == len(levels) - 1:
+                # Delete top level - remove last step
+                deltas_mm.pop(-1)
+            else:
+                # Delete middle level - merge steps
+                deltas_mm[idx - 1] = deltas_mm[idx - 1] + deltas_mm[idx]
+                deltas_mm.pop(idx)
+            levels.pop(idx)
+
+        elif choice == 3:  # Edit step height
+            ui.info("Select step to edit:")
+            step_options = [f"{levels[i]} → {levels[i+1]}" for i in range(len(deltas_mm))]
+            step_idx = ui.prompt_choice("Step:", step_options, default_index=0)
+            height_text = ui.prompt_string("New height", allow_empty=False)
+            try:
+                delta = parse_dimension_to_mm(height_text, dim_format)
+                if delta > 0:
+                    deltas_mm[step_idx] = delta
+                else:
+                    ui.error("Height must be > 0.")
+            except ValueError as e:
+                ui.error(f"Invalid dimension: {e}")
+
+    return levels, deltas_mm
