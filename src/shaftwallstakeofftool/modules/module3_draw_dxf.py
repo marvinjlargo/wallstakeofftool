@@ -42,38 +42,42 @@ def draw_level_schedule(
     """
     Draw level schedule column on the LEFT.
     For each level: horizontal tick line + text (level name + elevation in mm).
+    Text heights: 150-250mm for readability after PDF export.
     """
     x, base_y = origin_xy
-    text_height = 5  # mm
-    tick_length = 20  # mm
+    text_height = 200  # mm - readable after PDF export
+    tick_length = 50  # mm
+    line_spacing = 250  # mm - spacing between level name and elevation
     
     for i, z in enumerate(cum_z_list):
         y_line = base_y + z
         
-        # Draw horizontal tick line
+        # Draw horizontal tick line (aligns with level lines)
         msp.add_line(
             (x, y_line),
             (x + tick_length, y_line),
             dxfattribs={"layer": LAYER_LEVEL_LINES},
         )
         
-        # Add text: level name (top) and elevation (bottom)
+        # Add text: level name (above) and elevation (below)
         level_name = levels[i]
         elevation_mm = int(z)
         
-        # Level name
-        msp.add_text(
+        # Level name (stacked above)
+        level_text = msp.add_text(
             level_name,
             height=text_height,
             dxfattribs={"layer": LAYER_TEXT},
-        ).set_placement((x + tick_length + 5, y_line + text_height * 0.5))
+        )
+        level_text.set_placement((x + tick_length + 20, y_line + line_spacing))
         
-        # Elevation value
-        msp.add_text(
+        # Elevation value (stacked below)
+        elev_text = msp.add_text(
             str(elevation_mm),
-            height=text_height * 0.8,
+            height=text_height * 0.9,
             dxfattribs={"layer": LAYER_TEXT},
-        ).set_placement((x + tick_length + 5, y_line - text_height * 0.3))
+        )
+        elev_text.set_placement((x + tick_length + 20, y_line - line_spacing))
 
 
 def draw_elevation_view(
@@ -88,36 +92,27 @@ def draw_elevation_view(
 ) -> None:
     """
     Draw one elevation view with:
-    - Outer rectangle (view boundary)
-    - Horizontal level lines at each cum_z[i]
+    - Outer rectangle (LWPOLYLINE) on OUTLINE layer
+    - Horizontal level lines at each cum_z[i] across full view width
     - Grid bubble at TOP (circle + text)
-    - Simple label under the view
+    - Label under the view
     """
     x, y = origin_xy
     
-    # Outer rectangle
-    msp.add_line(
+    # Outer rectangle as LWPOLYLINE
+    rect_points = [
         (x, y),
         (x + view_width_mm, y),
-        dxfattribs={"layer": LAYER_OUTLINE},
-    )
-    msp.add_line(
-        (x + view_width_mm, y),
-        (x + view_width_mm, y + view_height_mm),
-        dxfattribs={"layer": LAYER_OUTLINE},
-    )
-    msp.add_line(
         (x + view_width_mm, y + view_height_mm),
         (x, y + view_height_mm),
-        dxfattribs={"layer": LAYER_OUTLINE},
-    )
-    msp.add_line(
-        (x, y + view_height_mm),
-        (x, y),
+    ]
+    msp.add_lwpolyline(
+        rect_points,
+        close=True,
         dxfattribs={"layer": LAYER_OUTLINE},
     )
     
-    # Horizontal level lines
+    # Horizontal level lines at each cum_z[i] across full view width
     for z in cum_z_list:
         y_line = y + z
         msp.add_line(
@@ -126,10 +121,10 @@ def draw_elevation_view(
             dxfattribs={"layer": LAYER_LEVEL_LINES},
         )
     
-    # Grid bubble at TOP of elevation
-    bubble_radius = 8  # mm
+    # Grid bubble at TOP of elevation (above rectangle)
+    bubble_radius = 30  # mm
     bubble_center_x = x + view_width_mm / 2
-    bubble_center_y = y + view_height_mm + bubble_radius + 5
+    bubble_center_y = y + view_height_mm + bubble_radius + 20  # offset above
     
     # Draw circle
     msp.add_circle(
@@ -139,7 +134,7 @@ def draw_elevation_view(
     )
     
     # Add text inside circle (centered)
-    bubble_text_height = 4  # mm
+    bubble_text_height = 150  # mm - readable
     bubble_text = msp.add_text(
         grid_string,
         height=bubble_text_height,
@@ -149,8 +144,8 @@ def draw_elevation_view(
     bubble_text.dxf.halign = 1  # Center horizontally
     bubble_text.dxf.valign = 1  # Center vertically
     
-    # Simple label under the view (centered)
-    label_text_height = 5  # mm
+    # Label under the view (centered)
+    label_text_height = 200  # mm - readable
     label_text = msp.add_text(
         view_label,
         height=label_text_height,
@@ -172,34 +167,26 @@ def draw_plan_inset(
 ) -> None:
     """
     Draw a small plan rectangle at TOP-RIGHT with grid labels on 4 sides.
+    Uses LWPOLYLINE for rectangle, TEXT for labels.
     """
     x, y = origin_xy
     
-    # Draw plan rectangle
-    msp.add_line(
+    # Draw plan rectangle as LWPOLYLINE
+    rect_points = [
         (x, y),
         (x + width_mm, y),
-        dxfattribs={"layer": LAYER_OUTLINE},
-    )
-    msp.add_line(
-        (x + width_mm, y),
-        (x + width_mm, y + height_mm),
-        dxfattribs={"layer": LAYER_OUTLINE},
-    )
-    msp.add_line(
         (x + width_mm, y + height_mm),
         (x, y + height_mm),
-        dxfattribs={"layer": LAYER_OUTLINE},
-    )
-    msp.add_line(
-        (x, y + height_mm),
-        (x, y),
+    ]
+    msp.add_lwpolyline(
+        rect_points,
+        close=True,
         dxfattribs={"layer": LAYER_OUTLINE},
     )
     
-    # Label 4 sides with grid strings
-    text_height = 4  # mm
-    label_offset = 5  # mm
+    # Label 4 sides with grid strings (TEXT only, no dimensions)
+    text_height = 150  # mm - readable
+    label_offset = 30  # mm
     
     # Left side (right-aligned, middle vertically)
     left_text = msp.add_text(
@@ -250,22 +237,25 @@ def draw_title_block(msp, origin_xy: Tuple[float, float], shaft: Dict[str, Any])
       "Grids: {grid_left}-{grid_right} / {grid_bottom}-{grid_top}"
     """
     x, y = origin_xy
-    text_height = 10  # mm
+    text_height = 200  # mm - readable
+    line_spacing = 250  # mm
     
     # Shaft name
-    msp.add_text(
+    name_text = msp.add_text(
         f"Shaft {shaft['name']}",
         height=text_height,
         dxfattribs={"layer": LAYER_TEXT},
-    ).set_placement((x, y))
+    )
+    name_text.set_placement((x, y))
     
     # Grids
     grid_text = f"Grids: {shaft['grid_left']}-{shaft['grid_right']} / {shaft['grid_bottom']}-{shaft['grid_top']}"
-    msp.add_text(
+    grids_text = msp.add_text(
         grid_text,
-        height=text_height * 0.8,
+        height=text_height * 0.9,
         dxfattribs={"layer": LAYER_TEXT},
-    ).set_placement((x, y - text_height * 1.2))
+    )
+    grids_text.set_placement((x, y - line_spacing))
 
 
 def module3_draw_dxf(
@@ -305,53 +295,45 @@ def module3_draw_dxf(
     current_page_origin_y = 0.0
     
     for shaft in shafts:
-        # Compute side widths
-        W_lr = shaft["height_mm"]  # left/right side width (plan depth)
-        W_bt = shaft["width_mm"]   # bottom/top side width (plan width)
+        # Compute side widths from shaft dimensions
+        W_left = shaft["height_mm"]   # left side width
+        W_right = shaft["height_mm"]  # right side width
+        W_bottom = shaft["width_mm"]  # bottom side width
+        W_top = shaft["width_mm"]      # top side width
         
-        # Level schedule width
-        SCHEDULE_WIDTH = 100  # mm
-        
-        # Elevation view widths
-        W_left = W_lr
-        W_right = W_lr
-        W_bottom = W_bt
-        W_top = W_bt
+        # Define constants (mm)
+        margin = PAGE_MARGIN_MM
+        gap = VIEW_GAP_MM
+        schedule_w = 300  # mm - level schedule width
+        top_band_h = 400  # mm - top band for plan inset
+        bottom_band_h = 400  # mm - bottom band for title block
+        label_band_h = 200  # mm - label band below elevations
         
         # Plan inset size
-        PLAN_INSET_WIDTH = 80  # mm
-        PLAN_INSET_HEIGHT = 60  # mm
+        inset_w = 200  # mm
+        inset_h = 150  # mm
         
-        # Title block area
-        TITLE_WIDTH = 200  # mm
-        TITLE_HEIGHT = 40  # mm
+        # Title block size
+        title_w = 400  # mm
+        title_h = 300  # mm
         
-        # Compute page size (LANDSCAPE: width > height)
-        # Horizontal layout: [schedule] [left] [right] [bottom] [top]
-        content_width = (
-            SCHEDULE_WIDTH + VIEW_GAP_MM +
-            W_left + VIEW_GAP_MM +
-            W_right + VIEW_GAP_MM +
-            W_bottom + VIEW_GAP_MM +
-            W_top
-        )
+        # Compute page dimensions (LANDSCAPE: width > height)
+        # Page width = margins + schedule + gap + (4 elevations with gaps)
+        page_w = 2 * margin + schedule_w + gap + (W_left + gap + W_right + gap + W_bottom + gap + W_top)
         
-        # Height: max of (elevation height H, plan inset + title block)
-        content_height = max(H, PLAN_INSET_HEIGHT + TITLE_HEIGHT + VIEW_GAP_MM)
+        # Page height = margins + top_band + bottom_band + label_band + elevation height H
+        page_h = 2 * margin + top_band_h + bottom_band_h + label_band_h + H
         
-        page_width = content_width + 2 * PAGE_MARGIN_MM
-        page_height = content_height + 2 * PAGE_MARGIN_MM
+        # Ensure landscape: if page_w <= page_h, increase page_w
+        if page_w <= page_h:
+            page_w = page_h + 1000  # Add extra whitespace to force landscape
         
-        # Ensure landscape (swap if needed)
-        if page_width <= page_height:
-            page_width, page_height = page_height, page_width
-        
-        # Draw page frame rectangle
+        # Draw SHEET_FRAME (LWPOLYLINE) around full page
         frame_points = [
             (current_page_origin_x, current_page_origin_y),
-            (current_page_origin_x + page_width, current_page_origin_y),
-            (current_page_origin_x + page_width, current_page_origin_y + page_height),
-            (current_page_origin_x, current_page_origin_y + page_height),
+            (current_page_origin_x + page_w, current_page_origin_y),
+            (current_page_origin_x + page_w, current_page_origin_y + page_h),
+            (current_page_origin_x, current_page_origin_y + page_h),
         ]
         msp.add_lwpolyline(
             frame_points,
@@ -359,30 +341,36 @@ def module3_draw_dxf(
             dxfattribs={"layer": LAYER_SHEET_FRAME},
         )
         
-        # Base Y for elevations (aligned with bottom)
-        base_y = current_page_origin_y + PAGE_MARGIN_MM
+        # Layout coordinates (all inside the frame)
+        # y_elev_base = origin_y + margin + bottom_band_h + label_band_h
+        y_elev_base = current_page_origin_y + margin + bottom_band_h + label_band_h
         
-        # X positions for horizontal row
-        x_schedule = current_page_origin_x + PAGE_MARGIN_MM
-        x_left = x_schedule + SCHEDULE_WIDTH + VIEW_GAP_MM
-        x_right = x_left + W_left + VIEW_GAP_MM
-        x_bottom = x_right + W_right + VIEW_GAP_MM
-        x_top = x_bottom + W_bottom + VIEW_GAP_MM
+        # x_schedule = origin_x + margin
+        x_schedule = current_page_origin_x + margin
         
-        # Draw level schedule (LEFT column)
+        # x_views0 = x_schedule + schedule_w + gap
+        x_views0 = x_schedule + schedule_w + gap
+        
+        # Place 4 elevation view rectangles horizontally
+        x_left = x_views0
+        x_right = x_left + W_left + gap
+        x_bottom = x_right + W_right + gap
+        x_top = x_bottom + W_bottom + gap
+        
+        # Draw level schedule (LEFT column, aligned with level lines)
         draw_level_schedule(
             msp,
-            (x_schedule, base_y),
+            (x_schedule, y_elev_base),
             levels,
             cum_z,
-            SCHEDULE_WIDTH,
+            schedule_w,
             H,
         )
         
-        # Draw 4 elevation views in horizontal row
+        # Draw 4 elevation views in ONE horizontal row
         draw_elevation_view(
             msp,
-            (x_left, base_y),
+            (x_left, y_elev_base),
             W_left,
             H,
             shaft['grid_left'],
@@ -392,7 +380,7 @@ def module3_draw_dxf(
         )
         draw_elevation_view(
             msp,
-            (x_right, base_y),
+            (x_right, y_elev_base),
             W_right,
             H,
             shaft['grid_right'],
@@ -402,7 +390,7 @@ def module3_draw_dxf(
         )
         draw_elevation_view(
             msp,
-            (x_bottom, base_y),
+            (x_bottom, y_elev_base),
             W_bottom,
             H,
             shaft['grid_bottom'],
@@ -412,7 +400,7 @@ def module3_draw_dxf(
         )
         draw_elevation_view(
             msp,
-            (x_top, base_y),
+            (x_top, y_elev_base),
             W_top,
             H,
             shaft['grid_top'],
@@ -421,27 +409,27 @@ def module3_draw_dxf(
             cum_z,
         )
         
-        # Plan inset at TOP-RIGHT
-        plan_inset_x = current_page_origin_x + page_width - PAGE_MARGIN_MM - PLAN_INSET_WIDTH
-        plan_inset_y = current_page_origin_y + page_height - PAGE_MARGIN_MM - PLAN_INSET_HEIGHT
+        # Plan inset (TOP-RIGHT of the sheet, inside top band area)
+        x_inset = current_page_origin_x + page_w - margin - inset_w
+        y_inset = current_page_origin_y + page_h - margin - inset_h
         draw_plan_inset(
             msp,
-            (plan_inset_x, plan_inset_y),
-            PLAN_INSET_WIDTH,
-            PLAN_INSET_HEIGHT,
+            (x_inset, y_inset),
+            inset_w,
+            inset_h,
             shaft['grid_left'],
             shaft['grid_right'],
             shaft['grid_bottom'],
             shaft['grid_top'],
         )
         
-        # Title block at BOTTOM-RIGHT
-        title_x = current_page_origin_x + page_width - PAGE_MARGIN_MM - TITLE_WIDTH
-        title_y = current_page_origin_y + PAGE_MARGIN_MM + TITLE_HEIGHT
-        draw_title_block(msp, (title_x, title_y), shaft)
+        # Title block (BOTTOM-RIGHT, inside bottom band)
+        x_title = current_page_origin_x + page_w - margin - title_w
+        y_title = current_page_origin_y + margin
+        draw_title_block(msp, (x_title, y_title), shaft)
         
         # Move origin for next shaft page
-        current_page_origin_x += page_width + PAGE_GAP_BETWEEN_SHAFTS_MM
+        current_page_origin_x += page_w + PAGE_GAP_BETWEEN_SHAFTS_MM
     
     # Save DXF
     output_dxf_path.parent.mkdir(parents=True, exist_ok=True)
