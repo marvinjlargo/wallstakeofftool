@@ -55,45 +55,67 @@ def find_sheet_frames(doc) -> list:
     return frames
 
 
-def choose_sheet_size(width_mm: float, height_mm: float) -> Tuple[str, Tuple[float, float], bool]:
+def choose_sheet_size_landscape(width_mm: float, height_mm: float) -> Tuple[str, Tuple[float, float]]:
     """
-    Choose smallest Arch sheet size that fits the bbox.
-    Returns: (sheet_name, (width, height), landscape)
+    Choose smallest Arch sheet size that fits the bbox in LANDSCAPE orientation.
+    Always returns landscape sheet (width >= height).
+    Returns: (sheet_name, (width, height))
     """
-    # Try both orientations
-    for landscape in [False, True]:
-        if landscape:
-            w, h = height_mm, width_mm
-        else:
-            w, h = width_mm, height_mm
-        
-        # Find smallest sheet that fits
-        best_sheet = None
-        best_area = float('inf')
-        
-        for sheet_name, (sw, sh) in ARCH_SHEET_SIZES.items():
-            if w <= sw and h <= sh:
-                area = sw * sh
-                if area < best_area:
-                    best_area = area
-                    best_sheet = (sheet_name, (sw, sh), landscape)
-        
-        if best_sheet:
-            return best_sheet
+    # Ensure landscape: if content is portrait, swap dimensions
+    if width_mm < height_mm:
+        content_w, content_h = height_mm, width_mm
+    else:
+        content_w, content_h = width_mm, height_mm
     
-    # Fallback to largest sheet
-    return ("ARCH_E", ARCH_SHEET_SIZES["ARCH_E"], False)
+    # Find smallest landscape sheet that fits
+    best_sheet = None
+    best_area = float('inf')
+    
+    for sheet_name, (sw, sh) in ARCH_SHEET_SIZES.items():
+        # Ensure sheet is landscape (swap if needed)
+        if sw < sh:
+            sw, sh = sh, sw
+        
+        if content_w <= sw and content_h <= sh:
+            area = sw * sh
+            if area < best_area:
+                best_area = area
+                best_sheet = (sheet_name, (sw, sh))
+    
+    if best_sheet:
+        return best_sheet
+    
+    # Fallback to largest sheet in landscape
+    sw, sh = ARCH_SHEET_SIZES["ARCH_E"]
+    if sw < sh:
+        sw, sh = sh, sw
+    return ("ARCH_E", (sw, sh))
 
 
-def render_frame_to_matplotlib(doc, frame_info: dict, sheet_size: Tuple[float, float], landscape: bool) -> plt.Figure:
-    """Render entities within frame bbox to matplotlib figure"""
+def render_frame_to_matplotlib(doc, frame_info: dict, sheet_size: Tuple[float, float]) -> plt.Figure:
+    """
+    Render entities within frame bbox to matplotlib figure.
+    Always renders in LANDSCAPE orientation (sheet width >= height).
+    """
     min_x, min_y, max_x, max_y = frame_info["bbox"]
-    width = max_x - min_x
-    height = max_y - min_y
+    content_width = max_x - min_x
+    content_height = max_y - min_y
     
     sheet_w, sheet_h = sheet_size
     
-    # Create figure with sheet size
+    # Ensure landscape: swap if needed (should already be landscape from choose_sheet_size_landscape)
+    if sheet_w < sheet_h:
+        sheet_w, sheet_h = sheet_h, sheet_w
+    
+    # Add margin
+    margin_mm = 20
+    
+    # Compute scale factor to fit content within sheet with margins
+    available_w = sheet_w - 2 * margin_mm
+    available_h = sheet_h - 2 * margin_mm
+    scale = min(available_w / content_width, available_h / content_height)
+    
+    # Create figure with sheet size (in inches) - LANDSCAPE
     fig = plt.figure(figsize=(sheet_w / 25.4, sheet_h / 25.4), dpi=100)
     ax = fig.add_subplot(111)
     ax.set_xlim(0, sheet_w)
@@ -101,14 +123,16 @@ def render_frame_to_matplotlib(doc, frame_info: dict, sheet_size: Tuple[float, f
     ax.set_aspect('equal')
     ax.axis('off')
     
-    # Center the frame content on the sheet
-    content_center_x = (min_x + max_x) / 2
-    content_center_y = (min_y + max_y) / 2
-    sheet_center_x = sheet_w / 2
-    sheet_center_y = sheet_h / 2
+    # Helper function to transform coordinates
+    def transform_x(x):
+        return (x - min_x) * scale + margin_mm
     
-    offset_x = sheet_center_x - content_center_x
-    offset_y = sheet_center_y - content_center_y
+    def transform_y(y):
+        return (y - min_y) * scale + margin_mm
+    
+    # Helper function to check if point is inside frame bbox
+    def point_inside(x, y):
+        return min_x <= x <= max_x and min_y <= y <= max_y
     
     # Render entities from modelspace that are within or intersect the frame
     msp = doc.modelspace()
@@ -117,52 +141,86 @@ def render_frame_to_matplotlib(doc, frame_info: dict, sheet_size: Tuple[float, f
         if entity.dxf.layer == LAYER_SHEET_FRAME:
             continue
         
-        # Get entity bbox
         try:
-            entity_bbox = entity.bbox()
-            if not entity_bbox:
-                continue
-            
-            e_min_x, e_min_y = entity_bbox.extmin
-            e_max_x, e_max_y = entity_bbox.extmax
-            
-            # Check if entity intersects frame
-            if e_max_x < min_x or e_min_x > max_x or e_max_y < min_y or e_min_y > max_y:
-                continue
-            
-            # Draw entity based on type
+            # Draw entity based on type with simple inside-frame checks
             if entity.dxftype() == "LINE":
                 start = entity.dxf.start
                 end = entity.dxf.end
-                ax.plot(
-                    [start.x + offset_x, end.x + offset_x],
-                    [start.y + offset_y, end.y + offset_y],
-                    color='black',
-                    linewidth=0.5,
-                )
+                # Draw if either endpoint is inside frame
+                if point_inside(start.x, start.y) or point_inside(end.x, end.y):
+                    ax.plot(
+                        [transform_x(start.x), transform_x(end.x)],
+                        [transform_y(start.y), transform_y(end.y)],
+                        color='black',
+                        linewidth=0.3,
+                    )
             
             elif entity.dxftype() == "LWPOLYLINE":
                 points = list(entity.vertices())
                 if points:
-                    xs = [p[0] + offset_x for p in points]
-                    ys = [p[1] + offset_y for p in points]
-                    if entity.is_closed:
-                        xs.append(xs[0])
-                        ys.append(ys[0])
-                    ax.plot(xs, ys, color='black', linewidth=0.5)
+                    # Draw if any vertex is inside frame
+                    if any(point_inside(p[0], p[1]) for p in points):
+                        xs = [transform_x(p[0]) for p in points]
+                        ys = [transform_y(p[1]) for p in points]
+                        if entity.is_closed:
+                            xs.append(xs[0])
+                            ys.append(ys[0])
+                        ax.plot(xs, ys, color='black', linewidth=0.3)
             
             elif entity.dxftype() == "TEXT":
                 pos = entity.dxf.insert
-                text = entity.dxf.text
-                height = entity.dxf.height
-                ax.text(
-                    pos.x + offset_x,
-                    pos.y + offset_y,
-                    text,
-                    fontsize=height * 0.7,  # Approximate scaling
-                    ha='left',
-                    va='bottom',
-                )
+                # Draw if insert point is inside frame
+                if point_inside(pos.x, pos.y):
+                    text = entity.dxf.text
+                    entity_height_mm = entity.dxf.height
+                    # Reasonable fontsize calculation
+                    fontsize = max(6, entity_height_mm * scale * 0.35)
+                    ax.text(
+                        transform_x(pos.x),
+                        transform_y(pos.y),
+                        text,
+                        fontsize=fontsize,
+                        ha='left',
+                        va='bottom',
+                    )
+            
+            elif entity.dxftype() == "MTEXT":
+                # Optional: handle MTEXT if present
+                try:
+                    pos = entity.dxf.insert
+                    if point_inside(pos.x, pos.y):
+                        text = entity.text
+                        entity_height_mm = entity.dxf.char_height
+                        fontsize = max(6, entity_height_mm * scale * 0.35)
+                        ax.text(
+                            transform_x(pos.x),
+                            transform_y(pos.y),
+                            text,
+                            fontsize=fontsize,
+                            ha='left',
+                            va='bottom',
+                        )
+                except Exception:
+                    # Skip if MTEXT can't be processed
+                    pass
+            
+            elif entity.dxftype() == "CIRCLE":
+                # Handle circles (for grid bubbles)
+                try:
+                    center = entity.dxf.center
+                    radius = entity.dxf.radius
+                    # Draw if center is inside frame or circle intersects frame
+                    if point_inside(center.x, center.y):
+                        circle = plt.Circle(
+                            (transform_x(center.x), transform_y(center.y)),
+                            radius * scale,
+                            fill=False,
+                            color='black',
+                            linewidth=0.3,
+                        )
+                        ax.add_patch(circle)
+                except Exception:
+                    pass
         
         except Exception:
             # Skip entities that can't be rendered
@@ -174,6 +232,7 @@ def render_frame_to_matplotlib(doc, frame_info: dict, sheet_size: Tuple[float, f
 def module4_export_pdf(dxf_path: Path, output_pdf_path: Path) -> None:
     """
     Convert DXF to multi-page PDF.
+    All pages are rendered in LANDSCAPE orientation (width >= height).
     
     Args:
         dxf_path: Path to input DXF file
@@ -199,12 +258,12 @@ def module4_export_pdf(dxf_path: Path, output_pdf_path: Path) -> None:
             width = frame_info["width"]
             height = frame_info["height"]
             
-            # Choose sheet size
-            sheet_name, sheet_size, landscape = choose_sheet_size(width, height)
+            # Choose sheet size (always landscape)
+            sheet_name, sheet_size = choose_sheet_size_landscape(width, height)
             
-            # Render frame to matplotlib
-            fig = render_frame_to_matplotlib(doc, frame_info, sheet_size, landscape)
+            # Render frame to matplotlib (always landscape)
+            fig = render_frame_to_matplotlib(doc, frame_info, sheet_size)
             
-            # Add to PDF
-            pdf.savefig(fig, bbox_inches='tight')
+            # Add to PDF (no bbox_inches='tight' - keep margins like a drawing sheet)
+            pdf.savefig(fig, bbox_inches=None)
             plt.close(fig)
