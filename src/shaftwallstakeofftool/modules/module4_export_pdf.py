@@ -25,17 +25,32 @@ def find_sheet_frames(doc) -> list:
     frames = []
     
     for entity in msp.query(f"LWPOLYLINE[layer=='{LAYER_SHEET_FRAME}']"):
-        # Get bounding box
-        bbox = entity.bbox()
-        if bbox:
-            min_x, min_y = bbox.extmin
-            max_x, max_y = bbox.extmax
+        # Compute bounding box manually from vertices
+        # LWPOLYLINE doesn't have bbox() method, so we compute from points
+        try:
+            vertices = list(entity.vertices())
+            if not vertices:
+                continue
+            
+            # Extract x and y coordinates
+            x_coords = [v[0] for v in vertices]
+            y_coords = [v[1] for v in vertices]
+            
+            # Compute bounding box
+            min_x = min(x_coords)
+            max_x = max(x_coords)
+            min_y = min(y_coords)
+            max_y = max(y_coords)
+            
             frames.append({
                 "entity": entity,
                 "bbox": (min_x, min_y, max_x, max_y),
                 "width": max_x - min_x,
                 "height": max_y - min_y,
             })
+        except Exception:
+            # Skip entities that can't be processed
+            continue
     
     return frames
 
