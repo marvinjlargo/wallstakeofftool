@@ -50,25 +50,33 @@ def module2_level_height_definition(ui: UI, dim_format: DimFormat) -> Dict[str, 
     deltas_mm: List[float] = []
 
     for i in range(len(levels) - 1):
-        ui.info("")
-        ui.info(f"Height from '{levels[i]}' to '{levels[i+1]}':")
-        height_text = ui.prompt_string("  Height", allow_empty=False)
+        while True:  # Loop until valid height is entered
+            ui.info("")
+            ui.info(f"Height from '{levels[i]}' to '{levels[i+1]}':")
+            height_text = ui.prompt_string("  Height", allow_empty=False)
 
-        try:
-            delta_mm = parse_dimension_to_mm(height_text, dim_format)
-            if delta_mm <= 0:
-                ui.error("Height must be > 0. Re-enter.")
-                continue
-            deltas_mm.append(delta_mm)
-        except ValueError as e:
-            ui.error(f"Invalid dimension: {e}")
-            ui.warn("Re-enter this height.")
-            continue
+            try:
+                delta_mm = parse_dimension_to_mm(height_text, dim_format)
+                if delta_mm <= 0:
+                    ui.error("Height must be > 0. Please re-enter.")
+                    continue  # Stay in loop for same pair
+                deltas_mm.append(delta_mm)
+                break  # Valid height entered, move to next pair
+            except ValueError as e:
+                ui.error(f"Invalid dimension: {e}")
+                ui.warn("Please re-enter this height.")
+                # Stay in loop for same pair
 
     # Simple editing options
     ui.info("")
     if ui.confirm("Edit levels or heights?", default_yes=False):
         levels, deltas_mm = _edit_levels_and_heights(ui, levels, deltas_mm, dim_format)
+    
+    # Final validation
+    if len(deltas_mm) != len(levels) - 1:
+        ui.error(f"Internal error: deltas count ({len(deltas_mm)}) doesn't match levels count ({len(levels)}).")
+        ui.error("Please re-run Module 2.")
+        return {"levels": [], "deltas_mm": []}
 
     # Final summary
     ui.info("")
@@ -87,6 +95,11 @@ def module2_level_height_definition(ui: UI, dim_format: DimFormat) -> Dict[str, 
 def _edit_levels_and_heights(ui: UI, levels: List[str], deltas_mm: List[float], dim_format: DimFormat) -> Tuple[List[str], List[float]]:
     """Simple editing interface for levels and heights"""
     while True:
+        # Validate before each edit operation
+        if len(deltas_mm) != len(levels) - 1:
+            ui.error(f"Error: deltas count ({len(deltas_mm)}) doesn't match levels count ({len(levels)}).")
+            ui.error("Editing cancelled. Please re-run Module 2.")
+            return levels, deltas_mm
         ui.info("")
         ui.info("Edit options:")
         choice = ui.prompt_choice(
@@ -115,18 +128,37 @@ def _edit_levels_and_heights(ui: UI, levels: List[str], deltas_mm: List[float], 
             idx = ui.prompt_choice("After level:", levels, default_index=0)
             new_name = ui.prompt_string("New level name", allow_empty=False)
             levels.insert(idx + 1, new_name)
-            # Need to add height for new step
-            height_text = ui.prompt_string(f"Height from '{levels[idx]}' to '{new_name}'", allow_empty=False)
-            try:
-                delta = parse_dimension_to_mm(height_text, dim_format)
-                if delta > 0:
-                    deltas_mm.insert(idx, delta)
-                else:
-                    ui.error("Height must be > 0. Insertion cancelled.")
-                    levels.pop(idx + 1)
-            except ValueError as e:
-                ui.error(f"Invalid dimension: {e}")
-                levels.pop(idx + 1)
+            
+            # Need TWO new heights: from previous to new, and from new to next
+            # First height: from levels[idx] to new_name
+            height1_valid = False
+            while not height1_valid:
+                height_text1 = ui.prompt_string(f"Height from '{levels[idx]}' to '{new_name}'", allow_empty=False)
+                try:
+                    delta1 = parse_dimension_to_mm(height_text1, dim_format)
+                    if delta1 > 0:
+                        height1_valid = True
+                    else:
+                        ui.error("Height must be > 0. Please re-enter.")
+                except ValueError as e:
+                    ui.error(f"Invalid dimension: {e}")
+            
+            # Second height: from new_name to levels[idx+2] (which was originally levels[idx+1])
+            height2_valid = False
+            while not height2_valid:
+                height_text2 = ui.prompt_string(f"Height from '{new_name}' to '{levels[idx+2]}'", allow_empty=False)
+                try:
+                    delta2 = parse_dimension_to_mm(height_text2, dim_format)
+                    if delta2 > 0:
+                        height2_valid = True
+                    else:
+                        ui.error("Height must be > 0. Please re-enter.")
+                except ValueError as e:
+                    ui.error(f"Invalid dimension: {e}")
+            
+            # Replace the old single height with two new heights
+            deltas_mm[idx] = delta1
+            deltas_mm.insert(idx + 1, delta2)
 
         elif choice == 2:  # Delete level
             if len(levels) <= 2:
@@ -137,27 +169,50 @@ def _edit_levels_and_heights(ui: UI, levels: List[str], deltas_mm: List[float], 
             if idx == 0:
                 # Delete bottom level - remove first step
                 deltas_mm.pop(0)
+                levels.pop(idx)
             elif idx == len(levels) - 1:
                 # Delete top level - remove last step
                 deltas_mm.pop(-1)
+                levels.pop(idx)
             else:
-                # Delete middle level - merge steps
-                deltas_mm[idx - 1] = deltas_mm[idx - 1] + deltas_mm[idx]
-                deltas_mm.pop(idx)
-            levels.pop(idx)
+                # Delete middle level - ask user for new height between remaining neighbors
+                ui.info(f"Deleting '{levels[idx]}' will merge steps from '{levels[idx-1]}' to '{levels[idx+1]}'.")
+                while True:
+                    height_text = ui.prompt_string(
+                        f"Enter new height from '{levels[idx-1]}' to '{levels[idx+1]}'",
+                        allow_empty=False
+                    )
+                    try:
+                        new_delta = parse_dimension_to_mm(height_text, dim_format)
+                        if new_delta > 0:
+                            # Replace the two old steps with one new step
+                            deltas_mm[idx - 1] = new_delta
+                            deltas_mm.pop(idx)
+                            levels.pop(idx)
+                            break
+                        else:
+                            ui.error("Height must be > 0. Please re-enter.")
+                    except ValueError as e:
+                        ui.error(f"Invalid dimension: {e}")
 
         elif choice == 3:  # Edit step height
+            if len(deltas_mm) == 0:
+                ui.error("No steps to edit.")
+                continue
             ui.info("Select step to edit:")
             step_options = [f"{levels[i]} → {levels[i+1]}" for i in range(len(deltas_mm))]
             step_idx = ui.prompt_choice("Step:", step_options, default_index=0)
-            height_text = ui.prompt_string("New height", allow_empty=False)
-            try:
-                delta = parse_dimension_to_mm(height_text, dim_format)
-                if delta > 0:
-                    deltas_mm[step_idx] = delta
-                else:
-                    ui.error("Height must be > 0.")
-            except ValueError as e:
-                ui.error(f"Invalid dimension: {e}")
+            
+            while True:  # Loop until valid height is entered
+                height_text = ui.prompt_string("New height", allow_empty=False)
+                try:
+                    delta = parse_dimension_to_mm(height_text, dim_format)
+                    if delta > 0:
+                        deltas_mm[step_idx] = delta
+                        break  # Valid height entered
+                    else:
+                        ui.error("Height must be > 0. Please re-enter.")
+                except ValueError as e:
+                    ui.error(f"Invalid dimension: {e}")
 
     return levels, deltas_mm

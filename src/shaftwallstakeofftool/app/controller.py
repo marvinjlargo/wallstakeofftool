@@ -112,12 +112,17 @@ class AppController:
 
         out = module2_level_height_definition(self.ui, self.state.dim_format)
 
-        self.db.replace_levels_and_steps(
-            self.state.project_id,
-            level_names_in_order=out["levels"],
-            deltas_mm_between_consecutive=out["deltas_mm"],
-        )
-        self.ui.info(f"Saved {len(out['levels'])} level(s) and {len(out['deltas_mm'])} step(s) to database.")
+        try:
+            self.db.replace_levels_and_steps(
+                self.state.project_id,
+                level_names_in_order=out["levels"],
+                deltas_mm_between_consecutive=out["deltas_mm"],
+            )
+            self.ui.info(f"Saved {len(out['levels'])} level(s) and {len(out['deltas_mm'])} step(s) to database.")
+        except ValueError as e:
+            self.ui.error(f"Failed to save levels/heights: {e}")
+            self.ui.warn("Returning to main menu.")
+            return
 
     def run_module_3(self) -> None:
         assert self.state is not None
