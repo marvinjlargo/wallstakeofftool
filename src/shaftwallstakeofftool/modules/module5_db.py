@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Literal, Dict, Any
+from typing import Optional, List, Literal, Dict, Any, Tuple
 
 from sqlalchemy import (
     create_engine,
@@ -279,3 +279,200 @@ class DB:
             s.add(e)
             s.commit()
             return e.id
+
+    # ---------------------------
+    # PROJECT CRUD (by name)
+    # ---------------------------
+
+    def _project_id_by_name(self, session, project_name: str) -> Optional[int]:
+        p = session.query(Project).filter(Project.name == project_name).one_or_none()
+        return p.id if p else None
+
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """Returns list of dicts: name, created_at, updated_at, shafts_count, levels_count."""
+        with self.Session() as s:
+            projects = s.query(Project).order_by(Project.updated_at.desc()).all()
+            out = []
+            for p in projects:
+                shafts_count = s.query(ShaftPlan).filter(ShaftPlan.project_id == p.id).count()
+                levels_count = s.query(Level).filter(Level.project_id == p.id).count()
+                out.append({
+                    "name": p.name,
+                    "created_at": p.created_at,
+                    "updated_at": p.updated_at,
+                    "shafts_count": shafts_count,
+                    "levels_count": levels_count,
+                })
+            return out
+
+    def get_project(self, project_name: str) -> Optional[Dict[str, Any]]:
+        """Returns metadata + dim_format for the project, or None if not found."""
+        with self.Session() as s:
+            p = s.query(Project).filter(Project.name == project_name).one_or_none()
+            if p is None:
+                return None
+            return {
+                "id": p.id,
+                "name": p.name,
+                "dim_format": p.dim_format,
+                "internal_unit": p.internal_unit,
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+            }
+
+    def rename_project(self, old_name: str, new_name: str) -> None:
+        with self.Session() as s:
+            p = s.query(Project).filter(Project.name == old_name).one_or_none()
+            if p is None:
+                raise ValueError(f"Project not found: {old_name}")
+            existing = s.query(Project).filter(Project.name == new_name).one_or_none()
+            if existing is not None:
+                raise ValueError(f"Project already exists: {new_name}")
+            p.name = new_name
+            p.updated_at = datetime.now(timezone.utc)
+            s.commit()
+
+    def delete_project(self, project_name: str) -> None:
+        with self.Session() as s:
+            p = s.query(Project).filter(Project.name == project_name).one_or_none()
+            if p is None:
+                raise ValueError(f"Project not found: {project_name}")
+            s.delete(p)
+            s.commit()
+
+    # ---------------------------
+    # SHAFT CRUD (by project_name)
+    # ---------------------------
+
+    def list_shafts(self, project_name: str) -> List[Dict[str, Any]]:
+        """Returns list of shaft dicts (name, grid_*, width_mm, height_mm) for the project."""
+        with self.Session() as s:
+            pid = self._project_id_by_name(s, project_name)
+            if pid is None:
+                return []
+            rows = (
+                s.query(ShaftPlan)
+                .filter(ShaftPlan.project_id == pid)
+                .order_by(ShaftPlan.id.asc())
+                .all()
+            )
+            return [
+                {
+                    "name": r.name,
+                    "grid_left": r.grid_left,
+                    "grid_right": r.grid_right,
+                    "grid_bottom": r.grid_bottom,
+                    "grid_top": r.grid_top,
+                    "width_mm": float(r.width_mm),
+                    "height_mm": float(r.height_mm),
+                }
+                for r in rows
+            ]
+
+    def get_shaft(self, project_name: str, shaft_name: str) -> Optional[Dict[str, Any]]:
+        with self.Session() as s:
+            pid = self._project_id_by_name(s, project_name)
+            if pid is None:
+                return None
+            r = (
+                s.query(ShaftPlan)
+                .filter(ShaftPlan.project_id == pid, ShaftPlan.name == shaft_name)
+                .one_or_none()
+            )
+            if r is None:
+                return None
+            return {
+                "name": r.name,
+                "grid_left": r.grid_left,
+                "grid_right": r.grid_right,
+                "grid_bottom": r.grid_bottom,
+                "grid_top": r.grid_top,
+                "width_mm": float(r.width_mm),
+                "height_mm": float(r.height_mm),
+            }
+
+    def upsert_shaft(self, project_name: str, shaft_dict: Dict[str, Any]) -> None:
+        """Insert if missing, update if exists (by project + shaft name)."""
+        with self.Session() as s:
+            pid = self._project_id_by_name(s, project_name)
+            if pid is None:
+                raise ValueError(f"Project not found: {project_name}")
+            name = shaft_dict.get("name")
+            if not name:
+                raise ValueError("shaft_dict must contain 'name'")
+            existing = (
+                s.query(ShaftPlan)
+                .filter(ShaftPlan.project_id == pid, ShaftPlan.name == name)
+                .one_or_none()
+            )
+            payload = {
+                "name": shaft_dict["name"],
+                "grid_left": shaft_dict["grid_left"],
+                "grid_right": shaft_dict["grid_right"],
+                "grid_bottom": shaft_dict["grid_bottom"],
+                "grid_top": shaft_dict["grid_top"],
+                "width_mm": float(shaft_dict["width_mm"]),
+                "height_mm": float(shaft_dict["height_mm"]),
+            }
+            if existing is not None:
+                for k, v in payload.items():
+                    setattr(existing, k, v)
+                existing.updated_at = datetime.now(timezone.utc)
+            else:
+                s.add(ShaftPlan(project_id=pid, **payload))
+            p = s.query(Project).filter(Project.id == pid).one()
+            p.updated_at = datetime.now(timezone.utc)
+            s.commit()
+
+    def delete_shaft(self, project_name: str, shaft_name: str) -> None:
+        with self.Session() as s:
+            pid = self._project_id_by_name(s, project_name)
+            if pid is None:
+                raise ValueError(f"Project not found: {project_name}")
+            r = (
+                s.query(ShaftPlan)
+                .filter(ShaftPlan.project_id == pid, ShaftPlan.name == shaft_name)
+                .one_or_none()
+            )
+            if r is None:
+                raise ValueError(f"Shaft not found: {project_name} / {shaft_name}")
+            s.delete(r)
+            p = s.query(Project).filter(Project.id == pid).one()
+            p.updated_at = datetime.now(timezone.utc)
+            s.commit()
+
+    # ---------------------------
+    # LEVELS CRUD (by project_name)
+    # ---------------------------
+
+    def get_levels(self, project_name: str) -> Tuple[List[str], List[float]]:
+        """Returns (levels[], deltas_mm[]) for the project. Empty if no levels."""
+        proj = self.get_project(project_name)
+        if proj is None:
+            return [], []
+        levels_rows, step_rows = self.load_levels_and_steps(proj["id"])
+        levels = [lv.name for lv in sorted(levels_rows, key=lambda x: x.order_index)]
+        if len(levels) < 2:
+            return levels, []
+        step_map = {(st.from_level_id, st.to_level_id): float(st.delta_mm) for st in step_rows}
+        level_ids = [lv.id for lv in sorted(levels_rows, key=lambda x: x.order_index)]
+        deltas = []
+        for i in range(len(level_ids) - 1):
+            key = (level_ids[i], level_ids[i + 1])
+            deltas.append(step_map.get(key, 0.0))
+        return levels, deltas
+
+    def save_levels(self, project_name: str, levels: List[str], deltas_mm: List[float]) -> None:
+        """Replaces existing levels and steps for the project."""
+        if len(levels) < 2:
+            raise ValueError("Need at least 2 levels.")
+        if len(deltas_mm) != len(levels) - 1:
+            raise ValueError("deltas_mm must have length N-1 for N levels.")
+        proj = self.get_project(project_name)
+        if proj is None:
+            raise ValueError(f"Project not found: {project_name}")
+        self.replace_levels_and_steps(
+            proj["id"],
+            level_names_in_order=levels,
+            deltas_mm_between_consecutive=deltas_mm,
+        )

@@ -92,6 +92,34 @@ def module2_level_height_definition(ui: UI, dim_format: DimFormat) -> Dict[str, 
     }
 
 
+def module2_edit_existing(
+    ui: UI,
+    levels: List[str],
+    deltas_mm: List[float],
+    dim_format: DimFormat,
+) -> Dict[str, Any]:
+    """
+    Edit existing levels and heights (e.g. loaded from DB).
+    Shows current data and runs the same edit flow (rename, insert, delete, edit step).
+    Returns {"levels": [...], "deltas_mm": [...]}.
+    """
+    if len(levels) < 2 or len(deltas_mm) != len(levels) - 1:
+        return {"levels": [], "deltas_mm": []}
+    ui.banner("Edit levels & heights (existing data)")
+    ui.info(f"Current levels ({len(levels)}):")
+    for i, lv in enumerate(levels, start=1):
+        ui.info(f"  {i}) {lv}")
+    ui.info("Level-to-level steps:")
+    for i in range(len(deltas_mm)):
+        ui.info(f"  {levels[i]} → {levels[i+1]}: {deltas_mm[i]:.2f} mm")
+    ui.info("")
+    levels, deltas_mm = _edit_levels_and_heights(ui, levels, deltas_mm, dim_format)
+    if len(deltas_mm) != len(levels) - 1:
+        ui.error("Edit left data inconsistent; not saving.")
+        return {"levels": [], "deltas_mm": []}
+    return {"levels": levels, "deltas_mm": deltas_mm}
+
+
 def _edit_levels_and_heights(ui: UI, levels: List[str], deltas_mm: List[float], dim_format: DimFormat) -> Tuple[List[str], List[float]]:
     """Simple editing interface for levels and heights"""
     while True:
