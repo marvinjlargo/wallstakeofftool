@@ -1,7 +1,7 @@
 """Module 3: Draw DXF Elevations"""
 
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import ezdxf
 from ezdxf import units
 from ..app.config import (
@@ -30,6 +30,45 @@ def build_cumulative_elevations(levels: List[str], steps: List[float]) -> List[f
 def total_height_mm(cum_z_list: List[float]) -> float:
     """Get total height from cumulative elevations"""
     return cum_z_list[-1] if cum_z_list else 0.0
+
+
+def resolve_linear_wall_height(
+    wall: Dict[str, Any],
+    levels: List[str],
+    deltas_mm: List[float],
+) -> Tuple[Optional[float], Optional[str], Optional[str], str]:
+    """
+    Resolve wall height from project levels using a single source-of-truth policy.
+
+    Returns:
+        (computed_height_mm, resolved_from_level, resolved_to_level, note)
+    """
+    if len(levels) < 2 or len(deltas_mm) != len(levels) - 1:
+        return None, None, None, "levels_missing"
+
+    cum_z = build_cumulative_elevations(levels, deltas_mm)
+    if len(cum_z) != len(levels):
+        return None, None, None, "levels_missing"
+    elev_map = {levels[i]: float(cum_z[i]) for i in range(len(levels))}
+
+    wall_level_from = wall.get("level_from")
+    wall_level_to = wall.get("level_to")
+    if (
+        wall_level_from
+        and wall_level_to
+        and wall_level_from in elev_map
+        and wall_level_to in elev_map
+    ):
+        from_level = wall_level_from
+        to_level = wall_level_to
+        note = "ok"
+    else:
+        from_level = levels[0]
+        to_level = levels[-1]
+        note = "default_full_building_span"
+
+    height_mm = abs(elev_map[to_level] - elev_map[from_level])
+    return float(height_mm), from_level, to_level, note
 
 
 def draw_level_schedule(
@@ -261,12 +300,147 @@ def draw_title_block(msp, origin_xy: Tuple[float, float], shaft: Dict[str, Any])
     grids_text.set_placement((x, y - line_spacing))
 
 
+def draw_linear_wall_page(
+    msp,
+    wall: Dict[str, Any],
+    levels: List[str],
+    deltas_mm: List[float],
+    page_origin_x: float,
+    page_origin_y: float,
+    label_dim_format: DimFormat,
+) -> float:
+    """
+    Draw one full sheet page for a linear wall and return the page width.
+    """
+    margin = PAGE_MARGIN_MM
+    gap = VIEW_GAP_MM
+    schedule_w = 300.0
+    top_band_h = 400.0
+    bottom_band_h = 450.0
+    label_band_h = 250.0
+    text_h = 180.0
+
+    wall_length_mm = float(wall.get("length_mm") or 0.0)
+    if wall_length_mm <= 0:
+        wall_length_mm = 1.0
+
+    wall_height_mm, resolved_from, resolved_to, height_note = resolve_linear_wall_height(
+        wall, levels, deltas_mm
+    )
+    placeholder_height_mm = 3000.0
+    draw_height_mm = wall_height_mm if wall_height_mm is not None else placeholder_height_mm
+    levels_ok = len(levels) >= 2 and len(deltas_mm) == len(levels) - 1
+
+    schedule_block_w = schedule_w + gap if levels_ok else 0.0
+    page_w = 2 * margin + schedule_block_w + wall_length_mm
+    page_h = 2 * margin + top_band_h + bottom_band_h + label_band_h + draw_height_mm
+    if page_w <= page_h:
+        page_w = page_h + 1000.0
+
+    frame_points = [
+        (page_origin_x, page_origin_y),
+        (page_origin_x + page_w, page_origin_y),
+        (page_origin_x + page_w, page_origin_y + page_h),
+        (page_origin_x, page_origin_y + page_h),
+    ]
+    msp.add_lwpolyline(
+        frame_points,
+        close=True,
+        dxfattribs={"layer": LAYER_SHEET_FRAME},
+    )
+
+    y_elev_base = page_origin_y + margin + bottom_band_h + label_band_h
+    x_schedule = page_origin_x + margin
+    x_wall = x_schedule + schedule_block_w
+
+    if levels_ok:
+        cum_z = build_cumulative_elevations(levels, deltas_mm)
+        draw_level_schedule(
+            msp,
+            (x_schedule, y_elev_base),
+            levels,
+            cum_z,
+            schedule_w,
+            total_height_mm(cum_z),
+            label_dim_format,
+        )
+
+    wall_rect_points = [
+        (x_wall, y_elev_base),
+        (x_wall + wall_length_mm, y_elev_base),
+        (x_wall + wall_length_mm, y_elev_base + draw_height_mm),
+        (x_wall, y_elev_base + draw_height_mm),
+    ]
+    msp.add_lwpolyline(
+        wall_rect_points,
+        close=True,
+        dxfattribs={"layer": LAYER_OUTLINE},
+    )
+
+    wall_name = wall.get("name", "Wall")
+    title = msp.add_text(
+        f"Linear Wall {wall_name}",
+        height=text_h,
+        dxfattribs={"layer": LAYER_TEXT},
+    )
+    title.set_placement((page_origin_x + margin, page_origin_y + page_h - margin - text_h))
+
+    label_line = msp.add_text(
+        (
+            f"Grid line {wall.get('grid_line', '')}: "
+            f"{wall.get('from_grid', '')} -> {wall.get('to_grid', '')}"
+        ),
+        height=text_h * 0.9,
+        dxfattribs={"layer": LAYER_TEXT},
+    )
+    label_line.set_placement((page_origin_x + margin, page_origin_y + page_h - margin - (text_h * 2.2)))
+
+    height_for_label_mm = wall_height_mm if wall_height_mm is not None else draw_height_mm
+    dims = msp.add_text(
+        (
+            f"L={format_mm(wall_length_mm, label_dim_format)} "
+            f"H={format_mm(height_for_label_mm, label_dim_format)}"
+        ),
+        height=text_h,
+        dxfattribs={"layer": LAYER_TEXT},
+    )
+    dims.set_placement((page_origin_x + margin, page_origin_y + margin + 120.0))
+
+    if height_note == "levels_missing":
+        tbd = msp.add_text(
+            "HEIGHT TBD (define levels)",
+            height=text_h,
+            dxfattribs={"layer": LAYER_TEXT},
+        )
+        tbd.set_placement((page_origin_x + margin, page_origin_y + margin + 360.0))
+    elif height_note == "default_full_building_span" and resolved_from and resolved_to:
+        note = msp.add_text(
+            f"Height defaults to {resolved_from}->{resolved_to} (set wall levels to change)",
+            height=text_h * 0.85,
+            dxfattribs={"layer": LAYER_TEXT},
+        )
+        note.set_placement((page_origin_x + margin, page_origin_y + margin + 360.0))
+
+    resolved_levels_text = (
+        f"Levels: {resolved_from}->{resolved_to}" if resolved_from and resolved_to else "Levels: TBD"
+    )
+    lvl = msp.add_text(
+        resolved_levels_text,
+        height=text_h * 0.9,
+        dxfattribs={"layer": LAYER_TEXT},
+    )
+    lvl.set_placement((page_origin_x + margin, page_origin_y + margin + 600.0))
+
+    return page_w
+
+
 def module3_draw_dxf(
     shafts: List[Dict[str, Any]],
     levels: List[str],
     deltas_mm: List[float],
     output_dxf_path: Path,
     label_dim_format: DimFormat,
+    linear_walls: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """
     Draw DXF file with elevation views for each shaft.
@@ -436,6 +610,19 @@ def module3_draw_dxf(
         # Move origin for next shaft page
         current_page_origin_x += page_w + PAGE_GAP_BETWEEN_SHAFTS_MM
     
+    walls = linear_walls or []
+    for wall in walls:
+        wall_page_w = draw_linear_wall_page(
+            msp,
+            wall=wall,
+            levels=levels,
+            deltas_mm=deltas_mm,
+            page_origin_x=current_page_origin_x,
+            page_origin_y=current_page_origin_y,
+            label_dim_format=label_dim_format,
+        )
+        current_page_origin_x += wall_page_w + PAGE_GAP_BETWEEN_SHAFTS_MM
+
     # Save DXF
     output_dxf_path.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(str(output_dxf_path))
