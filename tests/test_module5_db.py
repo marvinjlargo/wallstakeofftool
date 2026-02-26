@@ -126,6 +126,23 @@ class TestModule5DB(unittest.TestCase):
         self.assertEqual(levels, ["Bottom", "Top"])
         self.assertEqual(deltas, [200.0])
 
+    def test_update_project_dim_format_explicit(self) -> None:
+        """dim_format should only change via explicit update, not repeated get_or_create_project calls."""
+        pid = self.db.get_or_create_project("P", "MM_DECIMAL_2")
+        proj = self.db.get_project("P")
+        self.assertEqual(proj["dim_format"], "MM_DECIMAL_2")
+
+        # Calling get_or_create_project with a different format should NOT change existing dim_format
+        pid2 = self.db.get_or_create_project("P", "FT_DECIMAL_2")
+        self.assertEqual(pid, pid2)
+        proj_after = self.db.get_project("P")
+        self.assertEqual(proj_after["dim_format"], "MM_DECIMAL_2")
+
+        # Explicit update should change it
+        self.db.update_project_dim_format(pid, "FT_DECIMAL_2")
+        proj_updated = self.db.get_project("P")
+        self.assertEqual(proj_updated["dim_format"], "FT_DECIMAL_2")
+
 
 if __name__ == "__main__":
     unittest.main()

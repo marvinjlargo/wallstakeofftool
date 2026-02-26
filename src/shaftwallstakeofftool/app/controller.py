@@ -11,7 +11,7 @@ from ..modules.module2_levels_height import module2_level_height_definition, mod
 from ..modules.module3_draw_dxf import module3_draw_dxf
 from ..modules.module4_export_pdf import module4_export_pdf
 from ..services.downloads import save_to_downloads
-from ..services.units import parse_dimension_to_mm
+from ..services.units import parse_dimension_to_mm, format_mm
 from .state import AppState, AppPaths, DimFormat
 
 
@@ -162,6 +162,61 @@ class AppController:
             return "FT_DECIMAL_2"
         return "FT_IN_FRAC_QUARTER"
 
+    def _select_dim_format_with_default(self, current: DimFormat, prompt: str) -> DimFormat:
+        options = [
+            "mm (decimal, 2 decimals)",
+            "feet (decimal, 2 decimals)",
+            "feet-inches (fractions to 1/4\")",
+        ]
+        if current == "MM_DECIMAL_2":
+            default_index = 0
+        elif current == "FT_DECIMAL_2":
+            default_index = 1
+        else:
+            default_index = 2
+        idx = self.ui.prompt_choice(prompt, options, default_index=default_index)
+        if idx == 0:
+            return "MM_DECIMAL_2"
+        if idx == 1:
+            return "FT_DECIMAL_2"
+        return "FT_IN_FRAC_QUARTER"
+
+    def _dim_format_label(self, dim_format: DimFormat) -> str:
+        if dim_format == "MM_DECIMAL_2":
+            return "mm (decimal, 2 decimals)"
+        if dim_format == "FT_DECIMAL_2":
+            return "feet (decimal, 2 decimals)"
+        return "feet-inches (fractions to 1/4\")"
+
+    def _choose_session_dim_format(self, context: str) -> DimFormat:
+        """
+        Let the user optionally change units for a single editing/view session.
+        Returns the dim_format to use for this session.
+        May also update the project default dim_format if the user chooses so.
+        """
+        assert self.state is not None
+        current = self.state.dim_format
+        self.ui.info(
+            f"Current project units for {context}: {self._dim_format_label(current)} "
+            "(stored internally in mm)."
+        )
+        session_dim = self._select_dim_format_with_default(
+            current,
+            f"View/Edit units for this {context} session:",
+        )
+        if session_dim != current:
+            if self.ui.confirm(
+                f"Save '{self._dim_format_label(session_dim)}' as the new default units "
+                "for this project?", default_yes=False
+            ):
+                self.db.update_project_dim_format(self.state.project_id, session_dim)
+                self.state.dim_format = session_dim
+                self.ui.info(
+                    f"Project default units updated to {self._dim_format_label(session_dim)} "
+                    "(values still stored internally in mm)."
+                )
+        return session_dim
+
     def _project_menu_loop(self) -> None:
         """Project-level menu: summary, edit shafts/levels, generate DXF/PDF, back."""
         assert self.state is not None
@@ -178,6 +233,7 @@ class AppController:
                     "Generate DXF",
                     "Export PDF",
                     "Export package (DXF+PDF)",
+                    "Units settings",
                     "Back",
                 ],
                 default_index=0,
@@ -195,16 +251,43 @@ class AppController:
                 self.run_module_4()
             elif choice == 5:
                 self.run_export_package()
+            elif choice == 6:
+                self._units_settings()
             else:
                 return
 
             self.ui.pause()
 
+    def _units_settings(self) -> None:
+        """Show and optionally change the project's default dim_format."""
+        assert self.state is not None
+        current = self.state.dim_format
+        self.ui.banner("Units settings")
+        self.ui.info(
+            f"Current project dimension format: {self._dim_format_label(current)} "
+            "(stored internally in mm; displayed as chosen format)."
+        )
+        if not self.ui.confirm("Change default units for this project?", default_yes=False):
+            return
+        new_dim = self._select_dim_format_with_default(
+            current,
+            "New default dimension format for this project:",
+        )
+        if new_dim == current:
+            self.ui.info("Units unchanged.")
+            return
+        self.db.update_project_dim_format(self.state.project_id, new_dim)
+        self.state.dim_format = new_dim
+        self.ui.info(
+            f"Project default units set to {self._dim_format_label(new_dim)} "
+            "(all numeric values remain stored internally in mm)."
+        )
+
     def run_edit_shafts(self) -> None:
         """Edit shafts: list from DB, then Add / Edit / Delete."""
         assert self.state is not None
         project_name = self.state.project_name
-        dim_format = self.state.dim_format
+        session_dim_format = self._choose_session_dim_format("shafts")
 
         while True:
             shafts = self.db.list_shafts(project_name)
@@ -215,7 +298,10 @@ class AppController:
                 for s in shafts:
                     self.ui.info(
                         f"  • {s['name']} | {s['grid_left']}-{s['grid_right']} / "
-                        f"{s['grid_bottom']}-{s['grid_top']} | W={s['width_mm']:.2f}mm H={s['height_mm']:.2f}mm"
+                        f"{s['grid_bottom']}-{s['grid_top']} | "
+                        f"W={format_mm(s['width_mm'], session_dim_format)} "
+                        f"H={format_mm(s['height_mm'], session_dim_format)} "
+                        "(stored internally in mm)"
                     )
             else:
                 self.ui.info("No shafts yet.")
@@ -231,18 +317,27 @@ class AppController:
             if "Capture all" in actions[choice]:
                 out = module1_plan_input_terminal(self.ui)
                 if out["dim_format"] != self.state.dim_format:
-                    self.state.dim_format = out["dim_format"]
-                    self.db.get_or_create_project(project_name, out["dim_format"])
+                    self.ui.info(
+                        f"Module 1 used units: {self._dim_format_label(out['dim_format'])} "
+                        "(values stored internally in mm)."
+                    )
+                    if self.ui.confirm(
+                        "Save this as the new default units for this project?",
+                        default_yes=True,
+                    ):
+                        self.db.update_project_dim_format(self.state.project_id, out["dim_format"])
+                        self.state.dim_format = out["dim_format"]
+                        session_dim_format = out["dim_format"]
                 self.db.replace_shafts(self.state.project_id, out["shafts"])
                 self.ui.info(f"Saved {len(out['shafts'])} shaft(s).")
                 continue
             if "Add shaft" in actions[choice]:
-                self._shaft_add_one(project_name, dim_format)
+                self._shaft_add_one(project_name, session_dim_format)
                 continue
             if "Edit shaft" in actions[choice]:
                 if not shafts:
                     continue
-                self._shaft_edit_one(project_name, shafts, dim_format)
+                self._shaft_edit_one(project_name, shafts, session_dim_format)
                 continue
             if "Delete shaft" in actions[choice]:
                 if not shafts:
@@ -258,8 +353,12 @@ class AppController:
         grid_right = self.ui.prompt_string("Right gridline", allow_empty=False)
         grid_bottom = self.ui.prompt_string("Bottom gridline", allow_empty=False)
         grid_top = self.ui.prompt_string("Top gridline", allow_empty=False)
-        width_text = self.ui.prompt_string("Width (left→right)", allow_empty=False)
-        height_text = self.ui.prompt_string("Height (bottom→top)", allow_empty=False)
+        width_text = self.ui.prompt_string(
+            f"Width (left→right) [{self._dim_format_label(dim_format)}]", allow_empty=False
+        )
+        height_text = self.ui.prompt_string(
+            f"Height (bottom→top) [{self._dim_format_label(dim_format)}]", allow_empty=False
+        )
         try:
             width_mm = parse_dimension_to_mm(width_text, dim_format)
             height_mm = parse_dimension_to_mm(height_text, dim_format)
@@ -299,8 +398,16 @@ class AppController:
         grid_right = self.ui.prompt_string("Right gridline", default=current["grid_right"])
         grid_bottom = self.ui.prompt_string("Bottom gridline", default=current["grid_bottom"])
         grid_top = self.ui.prompt_string("Top gridline", default=current["grid_top"])
-        width_text = self.ui.prompt_string("Width (mm)", default=str(current["width_mm"]))
-        height_text = self.ui.prompt_string("Height (mm)", default=str(current["height_mm"]))
+        width_default = format_mm(current["width_mm"], dim_format)
+        height_default = format_mm(current["height_mm"], dim_format)
+        width_text = self.ui.prompt_string(
+            f"Width [{self._dim_format_label(dim_format)}]",
+            default=width_default,
+        )
+        height_text = self.ui.prompt_string(
+            f"Height [{self._dim_format_label(dim_format)}]",
+            default=height_default,
+        )
         try:
             width_mm = parse_dimension_to_mm(width_text, dim_format)
             height_mm = parse_dimension_to_mm(height_text, dim_format)
@@ -345,7 +452,7 @@ class AppController:
         """Edit levels & heights: load from DB if present, else capture from scratch."""
         assert self.state is not None
         project_name = self.state.project_name
-        dim_format = self.state.dim_format
+        dim_format = self._choose_session_dim_format("levels & heights")
         levels, deltas_mm = self.db.get_levels(project_name)
 
         if len(levels) >= 2 and len(deltas_mm) == len(levels) - 1:
@@ -417,11 +524,17 @@ class AppController:
             self.ui.error("Levels/heights not complete. Edit levels & heights first.")
             return
 
+        # Choose label units for this DXF export (geometry remains in mm)
+        label_dim_format = self._select_dim_format_with_default(
+            self.state.dim_format,
+            "Label units for DXF export (geometry is always in mm):",
+        )
+
         run_id = self.db.start_run(self.state.project_id)
 
         try:
             dxf_path = self.paths.output_dir / f"{self.state.project_name}_shafts.dxf"
-            module3_draw_dxf(shafts, levels, deltas_mm, dxf_path)
+            module3_draw_dxf(shafts, levels, deltas_mm, dxf_path, label_dim_format)
 
             self.state.last_dxf_path = dxf_path
             self.db.finish_run_ok(
@@ -497,12 +610,16 @@ class AppController:
 
         shafts = self._load_shafts_as_dicts()
         levels, deltas = self._load_levels_and_deltas()
+        dim_format = self.state.dim_format
 
         self.ui.info(f"Shafts saved: {len(shafts)}")
         for s in shafts:
             self.ui.info(
                 f"  - {s['name']} | grids: {s['grid_left']}-{s['grid_right']} / "
-                f"{s['grid_bottom']}-{s['grid_top']} | W={s['width_mm']:.2f}mm H={s['height_mm']:.2f}mm"
+                f"{s['grid_bottom']}-{s['grid_top']} | "
+                f"W={format_mm(s['width_mm'], dim_format)} "
+                f"H={format_mm(s['height_mm'], dim_format)} "
+                "(stored internally in mm)"
             )
 
         self.ui.info(f"Levels saved: {len(levels)}")
@@ -511,7 +628,11 @@ class AppController:
 
         self.ui.info(f"Level-to-level steps: {len(deltas)}")
         for i in range(len(deltas)):
-            self.ui.info(f"  - {levels[i]} → {levels[i+1]} : {deltas[i]:.2f} mm")
+            self.ui.info(
+                f"  - {levels[i]} → {levels[i+1]} : "
+                f"{format_mm(deltas[i], dim_format)} "
+                "(stored internally in mm)"
+            )
 
         if self.state.last_dxf_path:
             self.ui.info(f"Last DXF: {self.state.last_dxf_path}")

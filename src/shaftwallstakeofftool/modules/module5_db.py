@@ -171,6 +171,15 @@ class DB:
         self.Session = make_session_factory(self.engine)
 
     def get_or_create_project(self, project_name: str, dim_format: DimFormat) -> int:
+        """
+        Get an existing project ID by name, or create a new project with the
+        given dim_format and internal_unit='mm'.
+
+        IMPORTANT:
+        - For existing projects this does NOT change dim_format anymore.
+          Use update_project_dim_format(...) when the user explicitly chooses
+          a new default display/input format.
+        """
         with self.Session() as s:
             p = s.query(Project).filter(Project.name == project_name).one_or_none()
             if p is None:
@@ -179,10 +188,17 @@ class DB:
                 s.commit()
                 return p.id
 
+            return p.id
+
+    def update_project_dim_format(self, project_id: int, dim_format: DimFormat) -> None:
+        """Explicitly update a project's default display/input dim_format."""
+        with self.Session() as s:
+            p = s.query(Project).filter(Project.id == project_id).one_or_none()
+            if p is None:
+                raise ValueError(f"Project not found for id={project_id}")
             p.dim_format = dim_format
             p.updated_at = datetime.utcnow()
             s.commit()
-            return p.id
 
     def replace_shafts(self, project_id: int, shafts: List[Dict[str, Any]]) -> None:
         with self.Session() as s:

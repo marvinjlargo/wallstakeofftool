@@ -2,7 +2,7 @@
 
 from typing import Dict, Any, List, Literal, Tuple
 from ..ui.base import UI
-from ..services.units import parse_dimension_to_mm, DimFormat
+from ..services.units import parse_dimension_to_mm, format_mm, DimFormat
 
 
 def module2_level_height_definition(ui: UI, dim_format: DimFormat) -> Dict[str, Any]:
@@ -84,7 +84,11 @@ def module2_level_height_definition(ui: UI, dim_format: DimFormat) -> Dict[str, 
     ui.info(f"Levels: {len(levels)}")
     ui.info(f"Level-to-level steps: {len(deltas_mm)}")
     for i in range(len(deltas_mm)):
-        ui.info(f"  {levels[i]} → {levels[i+1]}: {deltas_mm[i]:.2f} mm")
+        ui.info(
+            f"  {levels[i]} → {levels[i+1]}: "
+            f"{format_mm(deltas_mm[i], dim_format)} "
+            "(stored internally in mm)"
+        )
 
     return {
         "levels": levels,
@@ -111,7 +115,11 @@ def module2_edit_existing(
         ui.info(f"  {i}) {lv}")
     ui.info("Level-to-level steps:")
     for i in range(len(deltas_mm)):
-        ui.info(f"  {levels[i]} → {levels[i+1]}: {deltas_mm[i]:.2f} mm")
+        ui.info(
+            f"  {levels[i]} → {levels[i+1]}: "
+            f"{format_mm(deltas_mm[i], dim_format)} "
+            "(stored internally in mm)"
+        )
     ui.info("")
     levels, deltas_mm = _edit_levels_and_heights(ui, levels, deltas_mm, dim_format)
     if len(deltas_mm) != len(levels) - 1:

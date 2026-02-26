@@ -16,6 +16,7 @@ from ..app.config import (
     TEXT_LABEL_OFFSET_X,
     TEXT_GAP_ABOVE_VIEW,
 )
+from ..services.units import format_mm, DimFormat
 
 
 def build_cumulative_elevations(levels: List[str], steps: List[float]) -> List[float]:
@@ -38,6 +39,7 @@ def draw_level_schedule(
     cum_z_list: List[float],
     schedule_width_mm: float,
     total_height_mm: float,
+    label_dim_format: DimFormat,
 ) -> None:
     """
     Draw level schedule column on the LEFT.
@@ -61,7 +63,8 @@ def draw_level_schedule(
         
         # Add text: level name (above) and elevation (below)
         level_name = levels[i]
-        elevation_mm = int(z)
+        # z is in mm (internal geometry units). Format text per selected label units.
+        elevation_str = format_mm(z, label_dim_format)
         
         # Level name (stacked above)
         level_text = msp.add_text(
@@ -73,7 +76,7 @@ def draw_level_schedule(
         
         # Elevation value (stacked below)
         elev_text = msp.add_text(
-            str(elevation_mm),
+            elevation_str,
             height=text_height * 0.9,
             dxfattribs={"layer": LAYER_TEXT},
         )
@@ -263,6 +266,7 @@ def module3_draw_dxf(
     levels: List[str],
     deltas_mm: List[float],
     output_dxf_path: Path,
+    label_dim_format: DimFormat,
 ) -> None:
     """
     Draw DXF file with elevation views for each shaft.
@@ -365,6 +369,7 @@ def module3_draw_dxf(
             cum_z,
             schedule_w,
             H,
+            label_dim_format,
         )
         
         # Draw 4 elevation views in ONE horizontal row
