@@ -143,6 +143,60 @@ class TestModule5DB(unittest.TestCase):
         proj_updated = self.db.get_project("P")
         self.assertEqual(proj_updated["dim_format"], "FT_DECIMAL_2")
 
+    def test_linear_walls_crud(self) -> None:
+        """Basic CRUD for LinearWall: add, get list, update, delete."""
+        self.db.get_or_create_project("P", "MM_DECIMAL_2")
+        proj = self.db.get_project("P")
+        self.assertIsNotNone(proj)
+        project_id = proj["id"]
+
+        # Add
+        wall_id = self.db.add_linear_wall(
+            project_id,
+            {
+                "name": "Wall 1",
+                "grid_line": "F",
+                "from_grid": "1",
+                "to_grid": "5",
+                "length_mm": 1000.0,
+                "height_mm": 3000.0,
+                "notes": "Test wall",
+            },
+        )
+        self.assertIsInstance(wall_id, int)
+
+        walls = self.db.get_linear_walls(project_id)
+        self.assertEqual(len(walls), 1)
+        w = walls[0]
+        self.assertEqual(w["name"], "Wall 1")
+        self.assertEqual(w["grid_line"], "F")
+        self.assertEqual(w["from_grid"], "1")
+        self.assertEqual(w["to_grid"], "5")
+        self.assertEqual(w["length_mm"], 1000.0)
+        self.assertEqual(w["height_mm"], 3000.0)
+        self.assertEqual(w["notes"], "Test wall")
+
+        # Update
+        self.db.update_linear_wall(
+            wall_id,
+            {
+                "name": "Wall 1A",
+                "length_mm": 1500.0,
+                "notes": "Updated",
+            },
+        )
+        walls_after = self.db.get_linear_walls(project_id)
+        self.assertEqual(len(walls_after), 1)
+        w2 = walls_after[0]
+        self.assertEqual(w2["name"], "Wall 1A")
+        self.assertEqual(w2["length_mm"], 1500.0)
+        self.assertEqual(w2["notes"], "Updated")
+
+        # Delete
+        self.db.delete_linear_wall(wall_id)
+        walls_final = self.db.get_linear_walls(project_id)
+        self.assertEqual(walls_final, [])
+
 
 if __name__ == "__main__":
     unittest.main()

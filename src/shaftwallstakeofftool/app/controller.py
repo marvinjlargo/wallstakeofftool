@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
+import csv
 
 from ..ui.base import UI
 from ..ui.terminal_ui import TerminalUI
@@ -230,9 +231,11 @@ class AppController:
                     "View summary",
                     "Edit shafts (add / edit / delete)",
                     "Edit levels & heights",
+                    "Edit linear walls (add / edit / delete)",
                     "Generate DXF",
                     "Export PDF",
                     "Export package (DXF+PDF)",
+                    "Export linear walls CSV",
                     "Units settings",
                     "Back",
                 ],
@@ -246,12 +249,16 @@ class AppController:
             elif choice == 2:
                 self.run_edit_levels()
             elif choice == 3:
-                self.run_module_3()
+                self.run_edit_linear_walls()
             elif choice == 4:
-                self.run_module_4()
+                self.run_module_3()
             elif choice == 5:
-                self.run_export_package()
+                self.run_module_4()
             elif choice == 6:
+                self.run_export_package()
+            elif choice == 7:
+                self.run_export_linear_walls_csv()
+            elif choice == 8:
                 self._units_settings()
             else:
                 return
@@ -622,6 +629,16 @@ class AppController:
                 "(stored internally in mm)"
             )
 
+        linear_walls = self.db.get_linear_walls(self.state.project_id)
+        self.ui.info(f"Linear walls saved: {len(linear_walls)}")
+        for w in linear_walls:
+            self.ui.info(
+                f"  - {w['name']} | grid line {w['grid_line']} from {w['from_grid']} to {w['to_grid']} | "
+                f"L={format_mm(w['length_mm'], dim_format)} "
+                f"H={format_mm(w['height_mm'], dim_format)} "
+                "(stored internally in mm)"
+            )
+
         self.ui.info(f"Levels saved: {len(levels)}")
         for i, lv in enumerate(levels):
             self.ui.info(f"  - {i+1}) {lv}")
@@ -669,3 +686,204 @@ class AppController:
             key = (level_ids_in_order[i], level_ids_in_order[i+1])
             deltas.append(step_map.get(key, 0.0))
         return levels, deltas
+
+    # ---------------------------
+    # LINEAR WALLS UI
+    # ---------------------------
+
+    def run_edit_linear_walls(self) -> None:
+        """Edit linear walls: list from DB, then Add / Edit / Delete."""
+        assert self.state is not None
+        session_dim_format = self._choose_session_dim_format("linear walls")
+
+        while True:
+            walls = self.db.get_linear_walls(self.state.project_id)
+            self.ui.banner("Edit linear walls")
+
+            if walls:
+                self.ui.info(f"Current linear walls ({len(walls)}):")
+                for w in walls:
+                    self.ui.info(
+                        f"  • {w['name']} | grid line {w['grid_line']} from {w['from_grid']} to {w['to_grid']} | "
+                        f"L={format_mm(w['length_mm'], session_dim_format)} "
+                        f"H={format_mm(w['height_mm'], session_dim_format)} "
+                        "(stored internally in mm)"
+                    )
+            else:
+                self.ui.info("No linear walls yet.")
+
+            actions = ["Add wall", "Edit wall", "Delete wall", "Back"]
+            if not walls:
+                actions = ["Add wall", "Back"]
+
+            choice = self.ui.prompt_choice("Action:", actions, default_index=len(actions) - 1)
+
+            if "Back" in actions[choice]:
+                return
+            if "Add wall" in actions[choice]:
+                self._linear_wall_add_one(session_dim_format)
+                continue
+            if "Edit wall" in actions[choice]:
+                if not walls:
+                    continue
+                self._linear_wall_edit_one(walls, session_dim_format)
+                continue
+            if "Delete wall" in actions[choice]:
+                if not walls:
+                    continue
+                self._linear_wall_delete_one(walls)
+                continue
+
+    def _linear_wall_add_one(self, dim_format: DimFormat) -> None:
+        """Prompt for one linear wall and insert."""
+        assert self.state is not None
+        self.ui.info("Add new linear wall")
+        name = self.ui.prompt_string("Wall name", allow_empty=False)
+        grid_line = self.ui.prompt_string("Grid line (e.g. 'F')", allow_empty=False)
+        from_grid = self.ui.prompt_string("From grid (e.g. '1' or 'F/1')", allow_empty=False)
+        to_grid = self.ui.prompt_string("To grid", allow_empty=False)
+        length_text = self.ui.prompt_string(
+            f"Length along grid line [{self._dim_format_label(dim_format)}]", allow_empty=False
+        )
+        height_text = self.ui.prompt_string(
+            f"Height (top→bottom) [{self._dim_format_label(dim_format)}]", allow_empty=False
+        )
+        notes = self.ui.prompt_string("Notes (optional)", allow_empty=True)
+
+        try:
+            length_mm = parse_dimension_to_mm(length_text, dim_format)
+            height_mm = parse_dimension_to_mm(height_text, dim_format)
+        except ValueError as e:
+            self.ui.error(str(e))
+            return
+
+        if length_mm <= 0 or height_mm <= 0:
+            self.ui.error("Length and height must be > 0.")
+            return
+
+        payload: Dict[str, Any] = {
+            "name": name,
+            "grid_line": grid_line,
+            "from_grid": from_grid,
+            "to_grid": to_grid,
+            "length_mm": length_mm,
+            "height_mm": height_mm,
+            "notes": notes or None,
+        }
+
+        try:
+            self.db.add_linear_wall(self.state.project_id, payload)
+            self.ui.info(f"Linear wall '{name}' saved.")
+        except ValueError as e:
+            self.ui.error(str(e))
+
+    def _linear_wall_edit_one(self, walls: List[Dict[str, Any]], dim_format: DimFormat) -> None:
+        """Select a linear wall, prompt with defaults, then update."""
+        assert self.state is not None
+        names = [w["name"] for w in walls]
+        idx = self.ui.prompt_choice("Select wall to edit:", names, default_index=0)
+        wall = walls[idx]
+
+        self.ui.info(f"Editing '{wall['name']}' (press Enter to keep current value)")
+        new_name = self.ui.prompt_string("Wall name", default=wall["name"])
+        grid_line = self.ui.prompt_string("Grid line", default=wall["grid_line"])
+        from_grid = self.ui.prompt_string("From grid", default=wall["from_grid"])
+        to_grid = self.ui.prompt_string("To grid", default=wall["to_grid"])
+
+        length_default = format_mm(wall["length_mm"], dim_format)
+        height_default = format_mm(wall["height_mm"], dim_format)
+        length_text = self.ui.prompt_string(
+            f"Length along grid line [{self._dim_format_label(dim_format)}]",
+            default=length_default,
+        )
+        height_text = self.ui.prompt_string(
+            f"Height (top→bottom) [{self._dim_format_label(dim_format)}]",
+            default=height_default,
+        )
+        notes_default = wall["notes"] or ""
+        notes = self.ui.prompt_string("Notes (optional)", default=notes_default, allow_empty=True)
+
+        try:
+            length_mm = parse_dimension_to_mm(length_text, dim_format)
+            height_mm = parse_dimension_to_mm(height_text, dim_format)
+        except ValueError as e:
+            self.ui.error(str(e))
+            return
+
+        if length_mm <= 0 or height_mm <= 0:
+            self.ui.error("Length and height must be > 0.")
+            return
+
+        payload: Dict[str, Any] = {
+            "name": new_name.strip() or wall["name"],
+            "grid_line": grid_line,
+            "from_grid": from_grid,
+            "to_grid": to_grid,
+            "length_mm": length_mm,
+            "height_mm": height_mm,
+            "notes": notes or None,
+        }
+
+        try:
+            self.db.update_linear_wall(wall["id"], payload)
+            self.ui.info("Linear wall updated.")
+        except ValueError as e:
+            self.ui.error(str(e))
+
+    def _linear_wall_delete_one(self, walls: List[Dict[str, Any]]) -> None:
+        """Select a linear wall, confirm, then delete."""
+        assert self.state is not None
+        names = [w["name"] for w in walls]
+        idx = self.ui.prompt_choice("Select wall to delete:", names, default_index=0)
+        wall = walls[idx]
+        if not self.ui.confirm(f"Delete linear wall '{wall['name']}'?", default_yes=False):
+            self.ui.info("Cancelled.")
+            return
+        try:
+            self.db.delete_linear_wall(wall["id"])
+            self.ui.info(f"Linear wall '{wall['name']}' deleted.")
+        except ValueError as e:
+            self.ui.error(str(e))
+
+    def run_export_linear_walls_csv(self) -> None:
+        """Export linear walls for the current project to a CSV file."""
+        assert self.state is not None
+        walls = self.db.get_linear_walls(self.state.project_id)
+        if not walls:
+            self.ui.warn("No linear walls to export.")
+            return
+
+        dim_format = self.state.dim_format
+        csv_path = self.paths.output_dir / f"{self.state.project_name}_linear_walls.csv"
+
+        try:
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    [
+                        "name",
+                        "grid_line",
+                        "from_grid",
+                        "to_grid",
+                        "length_display",
+                        "height_display",
+                        "length_mm",
+                        "height_mm",
+                    ]
+                )
+                for w in walls:
+                    writer.writerow(
+                        [
+                            w["name"],
+                            w["grid_line"],
+                            w["from_grid"],
+                            w["to_grid"],
+                            format_mm(w["length_mm"], dim_format),
+                            format_mm(w["height_mm"], dim_format),
+                            w["length_mm"],
+                            w["height_mm"],
+                        ]
+                    )
+            self.ui.info(f"Linear walls CSV exported: {csv_path}")
+        except Exception as e:
+            self.ui.error(f"Failed to export linear walls CSV: {e}")

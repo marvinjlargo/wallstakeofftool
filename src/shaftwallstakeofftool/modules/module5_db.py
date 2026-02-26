@@ -71,6 +71,7 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     shafts: Mapped[List["ShaftPlan"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    linear_walls: Mapped[List["LinearWall"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     levels: Mapped[List["Level"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     level_steps: Mapped[List["LevelStep"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     runs: Mapped[List["Run"]] = relationship(back_populates="project", cascade="all, delete-orphan")
@@ -94,6 +95,24 @@ class ShaftPlan(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="shafts")
+
+
+class LinearWall(Base):
+    __tablename__ = "linear_walls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    grid_line: Mapped[str] = mapped_column(String(50), nullable=False)
+    from_grid: Mapped[str] = mapped_column(String(50), nullable=False)
+    to_grid: Mapped[str] = mapped_column(String(50), nullable=False)
+    length_mm: Mapped[float] = mapped_column(Float, nullable=False)
+    height_mm: Mapped[float] = mapped_column(Float, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    project: Mapped["Project"] = relationship(back_populates="linear_walls")
 
 
 class Level(Base):
@@ -492,3 +511,85 @@ class DB:
             level_names_in_order=levels,
             deltas_mm_between_consecutive=deltas_mm,
         )
+
+    # ---------------------------
+    # LINEAR WALLS CRUD (by project_id)
+    # ---------------------------
+
+    def get_linear_walls(self, project_id: int) -> List[Dict[str, Any]]:
+        """Return linear walls for a project as list of dicts."""
+        with self.Session() as s:
+            rows = (
+                s.query(LinearWall)
+                .filter(LinearWall.project_id == project_id)
+                .order_by(LinearWall.id.asc())
+                .all()
+            )
+            walls: List[Dict[str, Any]] = []
+            for r in rows:
+                walls.append(
+                    {
+                        "id": r.id,
+                        "project_id": r.project_id,
+                        "name": r.name,
+                        "grid_line": r.grid_line,
+                        "from_grid": r.from_grid,
+                        "to_grid": r.to_grid,
+                        "length_mm": float(r.length_mm),
+                        "height_mm": float(r.height_mm),
+                        "notes": r.notes,
+                    }
+                )
+            return walls
+
+    def add_linear_wall(self, project_id: int, payload: Dict[str, Any]) -> int:
+        """Create a new linear wall for a project. Returns new wall id."""
+        with self.Session() as s:
+            proj = s.query(Project).filter(Project.id == project_id).one_or_none()
+            if proj is None:
+                raise ValueError(f"Project not found for id={project_id}")
+
+            wall = LinearWall(
+                project_id=project_id,
+                name=payload["name"],
+                grid_line=payload["grid_line"],
+                from_grid=payload["from_grid"],
+                to_grid=payload["to_grid"],
+                length_mm=float(payload["length_mm"]),
+                height_mm=float(payload["height_mm"]),
+                notes=payload.get("notes"),
+            )
+            s.add(wall)
+            proj.updated_at = datetime.utcnow()
+            s.commit()
+            return wall.id
+
+    def update_linear_wall(self, wall_id: int, payload: Dict[str, Any]) -> None:
+        """Update an existing linear wall by id."""
+        with self.Session() as s:
+            wall = s.query(LinearWall).filter(LinearWall.id == wall_id).one_or_none()
+            if wall is None:
+                raise ValueError(f"Linear wall not found for id={wall_id}")
+
+            for field in ("name", "grid_line", "from_grid", "to_grid", "length_mm", "height_mm", "notes"):
+                if field in payload:
+                    value = payload[field]
+                    if field in ("length_mm", "height_mm") and value is not None:
+                        value = float(value)
+                    setattr(wall, field, value)
+
+            wall.updated_at = datetime.utcnow()
+            proj = s.query(Project).filter(Project.id == wall.project_id).one()
+            proj.updated_at = datetime.utcnow()
+            s.commit()
+
+    def delete_linear_wall(self, wall_id: int) -> None:
+        """Delete a linear wall by id."""
+        with self.Session() as s:
+            wall = s.query(LinearWall).filter(LinearWall.id == wall_id).one_or_none()
+            if wall is None:
+                raise ValueError(f"Linear wall not found for id={wall_id}")
+            proj = s.query(Project).filter(Project.id == wall.project_id).one()
+            s.delete(wall)
+            proj.updated_at = datetime.utcnow()
+            s.commit()
