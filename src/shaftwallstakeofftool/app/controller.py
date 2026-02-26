@@ -705,6 +705,10 @@ class AppController:
             return {}
         return {levels[i]: float(cum_z[i]) for i in range(len(levels))}
 
+    def _linear_wall_levels_available(self, levels: List[str], deltas_mm: List[float]) -> bool:
+        """Linear-wall level assignment is available only when level data is complete."""
+        return len(levels) >= 2 and len(deltas_mm) == len(levels) - 1
+
     def _compute_linear_wall_height_mm(
         self,
         wall: Dict[str, Any],
@@ -810,12 +814,17 @@ class AppController:
         level_from: Optional[str] = None
         level_to: Optional[str] = None
         elevation_by_level = self._build_level_elevation_map(levels, deltas_mm)
-        if elevation_by_level:
+        if self._linear_wall_levels_available(levels, deltas_mm):
             from_idx = self.ui.prompt_choice("From level:", levels, default_index=0)
             to_default = 1 if len(levels) > 1 else 0
             to_idx = self.ui.prompt_choice("To level:", levels, default_index=to_default)
             level_from = levels[from_idx]
             level_to = levels[to_idx]
+        else:
+            self.ui.info(
+                "Levels are not defined yet; saving without from/to levels. "
+                "Height will be computed after levels are configured."
+            )
 
         computed_height_mm = self._compute_linear_wall_height_mm(
             {"level_from": level_from, "level_to": level_to},
@@ -875,7 +884,7 @@ class AppController:
         level_from: Optional[str] = None
         level_to: Optional[str] = None
         elevation_by_level = self._build_level_elevation_map(levels, deltas_mm)
-        if elevation_by_level:
+        if self._linear_wall_levels_available(levels, deltas_mm):
             from_default = 0
             to_default = 1 if len(levels) > 1 else 0
             if wall.get("level_from") in levels:
@@ -886,6 +895,11 @@ class AppController:
             to_idx = self.ui.prompt_choice("To level:", levels, default_index=to_default)
             level_from = levels[from_idx]
             level_to = levels[to_idx]
+        else:
+            self.ui.info(
+                "Levels are missing/incomplete; saving without from/to levels. "
+                "Height will be computed after levels are configured."
+            )
 
         computed_height_mm = self._compute_linear_wall_height_mm(
             {"level_from": level_from, "level_to": level_to},

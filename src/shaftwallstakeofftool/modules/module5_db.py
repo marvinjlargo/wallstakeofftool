@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -126,7 +127,7 @@ class LinearWall(Base):
     length_mm: Mapped[float] = mapped_column(Float, nullable=False)
     level_from: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     level_to: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    height_mm: Mapped[float] = mapped_column(Float, nullable=False)
+    height_mm: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default=text("0"))
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -207,6 +208,24 @@ class DB:
         self.engine = init_engine(cfg.db_path)
         init_db(self.engine)
         self.Session = make_session_factory(self.engine)
+
+    @staticmethod
+    def _normalize_optional_level_name(value: Any) -> Optional[str]:
+        """Normalize optional level names; blank values are treated as missing."""
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @staticmethod
+    def _coerce_linear_wall_height_mm(value: Any) -> float:
+        """
+        Keep linear wall cached height resilient for legacy rows.
+        Height is derived at runtime; persisted value is optional cache.
+        """
+        if value in (None, ""):
+            return 0.0
+        return float(value)
 
     def get_or_create_project(self, project_name: str, dim_format: DimFormat) -> int:
         """
@@ -555,9 +574,9 @@ class DB:
                         "from_grid": r.from_grid,
                         "to_grid": r.to_grid,
                         "length_mm": float(r.length_mm),
-                        "level_from": r.level_from,
-                        "level_to": r.level_to,
-                        "height_mm": float(r.height_mm),
+                        "level_from": self._normalize_optional_level_name(r.level_from),
+                        "level_to": self._normalize_optional_level_name(r.level_to),
+                        "height_mm": self._coerce_linear_wall_height_mm(r.height_mm),
                         "notes": r.notes,
                     }
                 )
@@ -577,9 +596,9 @@ class DB:
                 from_grid=payload["from_grid"],
                 to_grid=payload["to_grid"],
                 length_mm=float(payload["length_mm"]),
-                level_from=payload.get("level_from"),
-                level_to=payload.get("level_to"),
-                height_mm=float(payload.get("height_mm", 0.0) or 0.0),
+                level_from=self._normalize_optional_level_name(payload.get("level_from")),
+                level_to=self._normalize_optional_level_name(payload.get("level_to")),
+                height_mm=self._coerce_linear_wall_height_mm(payload.get("height_mm")),
                 notes=payload.get("notes"),
             )
             s.add(wall)
@@ -609,8 +628,10 @@ class DB:
                     value = payload[field]
                     if field == "length_mm" and value is not None:
                         value = float(value)
+                    if field in ("level_from", "level_to"):
+                        value = self._normalize_optional_level_name(value)
                     if field == "height_mm":
-                        value = float(value) if value is not None else 0.0
+                        value = self._coerce_linear_wall_height_mm(value)
                     setattr(wall, field, value)
 
             wall.updated_at = datetime.utcnow()

@@ -144,7 +144,7 @@ class TestModule5DB(unittest.TestCase):
         self.assertEqual(proj_updated["dim_format"], "FT_DECIMAL_2")
 
     def test_linear_walls_crud(self) -> None:
-        """Basic CRUD for LinearWall: add, get list, update, delete."""
+        """Basic CRUD for LinearWall: level refs persist, height is optional cache."""
         self.db.get_or_create_project("P", "MM_DECIMAL_2")
         proj = self.db.get_project("P")
         self.assertIsNotNone(proj)
@@ -159,7 +159,6 @@ class TestModule5DB(unittest.TestCase):
                 "from_grid": "1",
                 "to_grid": "5",
                 "length_mm": 1000.0,
-                "height_mm": 3000.0,
                 "level_from": "L1",
                 "level_to": "L3",
                 "notes": "Test wall",
@@ -177,7 +176,7 @@ class TestModule5DB(unittest.TestCase):
         self.assertEqual(w["length_mm"], 1000.0)
         self.assertEqual(w["level_from"], "L1")
         self.assertEqual(w["level_to"], "L3")
-        self.assertEqual(w["height_mm"], 3000.0)
+        self.assertEqual(w["height_mm"], 0.0)
         self.assertEqual(w["notes"], "Test wall")
 
         # Update
@@ -188,6 +187,7 @@ class TestModule5DB(unittest.TestCase):
                 "length_mm": 1500.0,
                 "level_from": "L2",
                 "level_to": "L5",
+                "height_mm": None,
                 "notes": "Updated",
             },
         )
@@ -198,6 +198,7 @@ class TestModule5DB(unittest.TestCase):
         self.assertEqual(w2["length_mm"], 1500.0)
         self.assertEqual(w2["level_from"], "L2")
         self.assertEqual(w2["level_to"], "L5")
+        self.assertEqual(w2["height_mm"], 0.0)
         self.assertEqual(w2["notes"], "Updated")
 
         # Delete
@@ -226,6 +227,41 @@ class TestModule5DB(unittest.TestCase):
         self.assertIsNone(walls[0]["level_from"])
         self.assertIsNone(walls[0]["level_to"])
         self.assertEqual(walls[0]["height_mm"], 0.0)
+
+    def test_linear_wall_normalizes_blank_level_values(self) -> None:
+        """Blank level values are normalized to None and height None coerces to 0."""
+        self.db.get_or_create_project("P", "MM_DECIMAL_2")
+        project_id = self.db.get_project("P")["id"]
+        wall_id = self.db.add_linear_wall(
+            project_id,
+            {
+                "name": "Wall Normalize",
+                "grid_line": "H",
+                "from_grid": "10",
+                "to_grid": "11",
+                "length_mm": 1400.0,
+                "level_from": "  L1  ",
+                "level_to": "   ",
+            },
+        )
+        wall = self.db.get_linear_walls(project_id)[0]
+        self.assertEqual(wall["id"], wall_id)
+        self.assertEqual(wall["level_from"], "L1")
+        self.assertIsNone(wall["level_to"])
+        self.assertEqual(wall["height_mm"], 0.0)
+
+        self.db.update_linear_wall(
+            wall_id,
+            {
+                "level_from": "  ",
+                "level_to": "  L2 ",
+                "height_mm": None,
+            },
+        )
+        updated = self.db.get_linear_walls(project_id)[0]
+        self.assertIsNone(updated["level_from"])
+        self.assertEqual(updated["level_to"], "L2")
+        self.assertEqual(updated["height_mm"], 0.0)
 
 
 if __name__ == "__main__":
