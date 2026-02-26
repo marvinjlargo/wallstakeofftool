@@ -300,6 +300,28 @@ def draw_title_block(msp, origin_xy: Tuple[float, float], shaft: Dict[str, Any])
     grids_text.set_placement((x, y - line_spacing))
 
 
+def draw_wall_level_break_lines(
+    msp,
+    x0: float,
+    y0: float,
+    wall_length_mm: float,
+    span_bottom: float,
+    span_top: float,
+    cum_z: List[float],
+) -> None:
+    """
+    Draw intermediate level break lines inside a linear wall rectangle.
+    """
+    for z in cum_z:
+        if span_bottom < z < span_top:
+            y_line = y0 + (z - span_bottom)
+            msp.add_line(
+                (x0, y_line),
+                (x0 + wall_length_mm, y_line),
+                dxfattribs={"layer": LAYER_LEVEL_LINES},
+            )
+
+
 def draw_linear_wall_page(
     msp,
     wall: Dict[str, Any],
@@ -330,6 +352,12 @@ def draw_linear_wall_page(
     placeholder_height_mm = 3000.0
     draw_height_mm = wall_height_mm if wall_height_mm is not None else placeholder_height_mm
     levels_ok = len(levels) >= 2 and len(deltas_mm) == len(levels) - 1
+    cum_z = build_cumulative_elevations(levels, deltas_mm) if levels_ok else []
+    elev_map = (
+        {levels[i]: float(cum_z[i]) for i in range(len(levels))}
+        if levels_ok and len(cum_z) == len(levels)
+        else {}
+    )
 
     schedule_block_w = schedule_w + gap if levels_ok else 0.0
     page_w = 2 * margin + schedule_block_w + wall_length_mm
@@ -354,7 +382,6 @@ def draw_linear_wall_page(
     x_wall = x_schedule + schedule_block_w
 
     if levels_ok:
-        cum_z = build_cumulative_elevations(levels, deltas_mm)
         draw_level_schedule(
             msp,
             (x_schedule, y_elev_base),
@@ -376,6 +403,24 @@ def draw_linear_wall_page(
         close=True,
         dxfattribs={"layer": LAYER_OUTLINE},
     )
+
+    if (
+        height_note != "levels_missing"
+        and resolved_from in elev_map
+        and resolved_to in elev_map
+        and wall_height_mm is not None
+    ):
+        z0 = elev_map[resolved_from]
+        z1 = elev_map[resolved_to]
+        draw_wall_level_break_lines(
+            msp,
+            x0=x_wall,
+            y0=y_elev_base,
+            wall_length_mm=wall_length_mm,
+            span_bottom=min(z0, z1),
+            span_top=max(z0, z1),
+            cum_z=cum_z,
+        )
 
     wall_name = wall.get("name", "Wall")
     title = msp.add_text(
