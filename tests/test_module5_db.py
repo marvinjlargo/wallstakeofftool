@@ -160,6 +160,8 @@ class TestModule5DB(unittest.TestCase):
                 "to_grid": "5",
                 "length_mm": 1000.0,
                 "height_mm": 3000.0,
+                "level_from": "L1",
+                "level_to": "L3",
                 "notes": "Test wall",
             },
         )
@@ -173,6 +175,8 @@ class TestModule5DB(unittest.TestCase):
         self.assertEqual(w["from_grid"], "1")
         self.assertEqual(w["to_grid"], "5")
         self.assertEqual(w["length_mm"], 1000.0)
+        self.assertEqual(w["level_from"], "L1")
+        self.assertEqual(w["level_to"], "L3")
         self.assertEqual(w["height_mm"], 3000.0)
         self.assertEqual(w["notes"], "Test wall")
 
@@ -182,6 +186,8 @@ class TestModule5DB(unittest.TestCase):
             {
                 "name": "Wall 1A",
                 "length_mm": 1500.0,
+                "level_from": "L2",
+                "level_to": "L5",
                 "notes": "Updated",
             },
         )
@@ -190,12 +196,36 @@ class TestModule5DB(unittest.TestCase):
         w2 = walls_after[0]
         self.assertEqual(w2["name"], "Wall 1A")
         self.assertEqual(w2["length_mm"], 1500.0)
+        self.assertEqual(w2["level_from"], "L2")
+        self.assertEqual(w2["level_to"], "L5")
         self.assertEqual(w2["notes"], "Updated")
 
         # Delete
         self.db.delete_linear_wall(wall_id)
         walls_final = self.db.get_linear_walls(project_id)
         self.assertEqual(walls_final, [])
+
+    def test_linear_wall_defaults_when_levels_unknown(self) -> None:
+        """Linear walls can be saved without level references and height defaults to 0."""
+        self.db.get_or_create_project("P", "MM_DECIMAL_2")
+        project_id = self.db.get_project("P")["id"]
+        wall_id = self.db.add_linear_wall(
+            project_id,
+            {
+                "name": "Wall Unknown",
+                "grid_line": "G",
+                "from_grid": "1",
+                "to_grid": "2",
+                "length_mm": 1200.0,
+                "notes": None,
+            },
+        )
+        walls = self.db.get_linear_walls(project_id)
+        self.assertEqual(len(walls), 1)
+        self.assertEqual(walls[0]["id"], wall_id)
+        self.assertIsNone(walls[0]["level_from"])
+        self.assertIsNone(walls[0]["level_to"])
+        self.assertEqual(walls[0]["height_mm"], 0.0)
 
 
 if __name__ == "__main__":

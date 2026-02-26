@@ -9,7 +9,7 @@ from ..ui.terminal_ui import TerminalUI
 from ..modules.module5_db import DB, DBConfig
 from ..modules.module1_plan_input import module1_plan_input_terminal
 from ..modules.module2_levels_height import module2_level_height_definition, module2_edit_existing
-from ..modules.module3_draw_dxf import module3_draw_dxf
+from ..modules.module3_draw_dxf import module3_draw_dxf, build_cumulative_elevations
 from ..modules.module4_export_pdf import module4_export_pdf
 from ..services.downloads import save_to_downloads
 from ..services.units import parse_dimension_to_mm, format_mm
@@ -630,13 +630,19 @@ class AppController:
             )
 
         linear_walls = self.db.get_linear_walls(self.state.project_id)
+        elevation_by_level = self._build_level_elevation_map(levels, deltas)
         self.ui.info(f"Linear walls saved: {len(linear_walls)}")
         for w in linear_walls:
+            level_range = (
+                f"{w.get('level_from')}->{w.get('level_to')}"
+                if w.get("level_from") and w.get("level_to")
+                else "(levels not set)"
+            )
             self.ui.info(
                 f"  - {w['name']} | grid line {w['grid_line']} from {w['from_grid']} to {w['to_grid']} | "
                 f"L={format_mm(w['length_mm'], dim_format)} "
-                f"H={format_mm(w['height_mm'], dim_format)} "
-                "(stored internally in mm)"
+                f"H={self._linear_wall_height_display(w, elevation_by_level, dim_format)} "
+                f"| levels {level_range}"
             )
 
         self.ui.info(f"Levels saved: {len(levels)}")
@@ -687,6 +693,42 @@ class AppController:
             deltas.append(step_map.get(key, 0.0))
         return levels, deltas
 
+    def _build_level_elevation_map(
+        self,
+        levels: List[str],
+        deltas_mm: List[float],
+    ) -> Dict[str, float]:
+        if len(levels) < 2 or len(deltas_mm) != len(levels) - 1:
+            return {}
+        cum_z = build_cumulative_elevations(levels, deltas_mm)
+        if len(cum_z) != len(levels):
+            return {}
+        return {levels[i]: float(cum_z[i]) for i in range(len(levels))}
+
+    def _compute_linear_wall_height_mm(
+        self,
+        wall: Dict[str, Any],
+        elevation_by_level: Dict[str, float],
+    ) -> Optional[float]:
+        level_from = wall.get("level_from")
+        level_to = wall.get("level_to")
+        if not level_from or not level_to:
+            return None
+        if level_from not in elevation_by_level or level_to not in elevation_by_level:
+            return None
+        return abs(elevation_by_level[level_to] - elevation_by_level[level_from])
+
+    def _linear_wall_height_display(
+        self,
+        wall: Dict[str, Any],
+        elevation_by_level: Dict[str, float],
+        dim_format: DimFormat,
+    ) -> str:
+        height_mm = self._compute_linear_wall_height_mm(wall, elevation_by_level)
+        if height_mm is None:
+            return "(set levels to compute height)"
+        return format_mm(height_mm, dim_format)
+
     # ---------------------------
     # LINEAR WALLS UI
     # ---------------------------
@@ -698,16 +740,23 @@ class AppController:
 
         while True:
             walls = self.db.get_linear_walls(self.state.project_id)
+            levels, deltas_mm = self.db.get_levels(self.state.project_name)
+            elevation_by_level = self._build_level_elevation_map(levels, deltas_mm)
             self.ui.banner("Edit linear walls")
 
             if walls:
                 self.ui.info(f"Current linear walls ({len(walls)}):")
                 for w in walls:
+                    level_range = (
+                        f"{w.get('level_from')}->{w.get('level_to')}"
+                        if w.get("level_from") and w.get("level_to")
+                        else "(levels not set)"
+                    )
                     self.ui.info(
                         f"  • {w['name']} | grid line {w['grid_line']} from {w['from_grid']} to {w['to_grid']} | "
                         f"L={format_mm(w['length_mm'], session_dim_format)} "
-                        f"H={format_mm(w['height_mm'], session_dim_format)} "
-                        "(stored internally in mm)"
+                        f"H={self._linear_wall_height_display(w, elevation_by_level, session_dim_format)} "
+                        f"| levels {level_range}"
                     )
             else:
                 self.ui.info("No linear walls yet.")
@@ -745,21 +794,33 @@ class AppController:
         length_text = self.ui.prompt_string(
             f"Length along grid line [{self._dim_format_label(dim_format)}]", allow_empty=False
         )
-        height_text = self.ui.prompt_string(
-            f"Height (top→bottom) [{self._dim_format_label(dim_format)}]", allow_empty=False
-        )
         notes = self.ui.prompt_string("Notes (optional)", allow_empty=True)
 
         try:
             length_mm = parse_dimension_to_mm(length_text, dim_format)
-            height_mm = parse_dimension_to_mm(height_text, dim_format)
         except ValueError as e:
             self.ui.error(str(e))
             return
 
-        if length_mm <= 0 or height_mm <= 0:
-            self.ui.error("Length and height must be > 0.")
+        if length_mm <= 0:
+            self.ui.error("Length must be > 0.")
             return
+
+        levels, deltas_mm = self.db.get_levels(self.state.project_name)
+        level_from: Optional[str] = None
+        level_to: Optional[str] = None
+        elevation_by_level = self._build_level_elevation_map(levels, deltas_mm)
+        if elevation_by_level:
+            from_idx = self.ui.prompt_choice("From level:", levels, default_index=0)
+            to_default = 1 if len(levels) > 1 else 0
+            to_idx = self.ui.prompt_choice("To level:", levels, default_index=to_default)
+            level_from = levels[from_idx]
+            level_to = levels[to_idx]
+
+        computed_height_mm = self._compute_linear_wall_height_mm(
+            {"level_from": level_from, "level_to": level_to},
+            elevation_by_level,
+        )
 
         payload: Dict[str, Any] = {
             "name": name,
@@ -767,7 +828,9 @@ class AppController:
             "from_grid": from_grid,
             "to_grid": to_grid,
             "length_mm": length_mm,
-            "height_mm": height_mm,
+            "level_from": level_from,
+            "level_to": level_to,
+            "height_mm": computed_height_mm if computed_height_mm is not None else 0.0,
             "notes": notes or None,
         }
 
@@ -791,28 +854,43 @@ class AppController:
         to_grid = self.ui.prompt_string("To grid", default=wall["to_grid"])
 
         length_default = format_mm(wall["length_mm"], dim_format)
-        height_default = format_mm(wall["height_mm"], dim_format)
         length_text = self.ui.prompt_string(
             f"Length along grid line [{self._dim_format_label(dim_format)}]",
             default=length_default,
-        )
-        height_text = self.ui.prompt_string(
-            f"Height (top→bottom) [{self._dim_format_label(dim_format)}]",
-            default=height_default,
         )
         notes_default = wall["notes"] or ""
         notes = self.ui.prompt_string("Notes (optional)", default=notes_default, allow_empty=True)
 
         try:
             length_mm = parse_dimension_to_mm(length_text, dim_format)
-            height_mm = parse_dimension_to_mm(height_text, dim_format)
         except ValueError as e:
             self.ui.error(str(e))
             return
 
-        if length_mm <= 0 or height_mm <= 0:
-            self.ui.error("Length and height must be > 0.")
+        if length_mm <= 0:
+            self.ui.error("Length must be > 0.")
             return
+
+        levels, deltas_mm = self.db.get_levels(self.state.project_name)
+        level_from: Optional[str] = None
+        level_to: Optional[str] = None
+        elevation_by_level = self._build_level_elevation_map(levels, deltas_mm)
+        if elevation_by_level:
+            from_default = 0
+            to_default = 1 if len(levels) > 1 else 0
+            if wall.get("level_from") in levels:
+                from_default = levels.index(wall["level_from"])
+            if wall.get("level_to") in levels:
+                to_default = levels.index(wall["level_to"])
+            from_idx = self.ui.prompt_choice("From level:", levels, default_index=from_default)
+            to_idx = self.ui.prompt_choice("To level:", levels, default_index=to_default)
+            level_from = levels[from_idx]
+            level_to = levels[to_idx]
+
+        computed_height_mm = self._compute_linear_wall_height_mm(
+            {"level_from": level_from, "level_to": level_to},
+            elevation_by_level,
+        )
 
         payload: Dict[str, Any] = {
             "name": new_name.strip() or wall["name"],
@@ -820,7 +898,9 @@ class AppController:
             "from_grid": from_grid,
             "to_grid": to_grid,
             "length_mm": length_mm,
-            "height_mm": height_mm,
+            "level_from": level_from,
+            "level_to": level_to,
+            "height_mm": computed_height_mm if computed_height_mm is not None else 0.0,
             "notes": notes or None,
         }
 
@@ -855,6 +935,8 @@ class AppController:
 
         dim_format = self.state.dim_format
         csv_path = self.paths.output_dir / f"{self.state.project_name}_linear_walls.csv"
+        levels, deltas_mm = self.db.get_levels(self.state.project_name)
+        elevation_by_level = self._build_level_elevation_map(levels, deltas_mm)
 
         try:
             with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -865,23 +947,36 @@ class AppController:
                         "grid_line",
                         "from_grid",
                         "to_grid",
+                        "from_level",
+                        "to_level",
                         "length_display",
                         "height_display",
                         "length_mm",
-                        "height_mm",
+                        "height_mm_computed",
+                        "height_note",
                     ]
                 )
                 for w in walls:
+                    computed_height_mm = self._compute_linear_wall_height_mm(w, elevation_by_level)
+                    height_display = (
+                        format_mm(computed_height_mm, dim_format)
+                        if computed_height_mm is not None
+                        else "(set levels to compute height)"
+                    )
+                    height_note = "" if computed_height_mm is not None else "needs levels"
                     writer.writerow(
                         [
                             w["name"],
                             w["grid_line"],
                             w["from_grid"],
                             w["to_grid"],
+                            w.get("level_from") or "",
+                            w.get("level_to") or "",
                             format_mm(w["length_mm"], dim_format),
-                            format_mm(w["height_mm"], dim_format),
+                            height_display,
                             w["length_mm"],
-                            w["height_mm"],
+                            computed_height_mm if computed_height_mm is not None else "",
+                            height_note,
                         ]
                     )
             self.ui.info(f"Linear walls CSV exported: {csv_path}")

@@ -47,6 +47,23 @@ def init_engine(db_path: Path):
 
 def init_db(engine) -> None:
     Base.metadata.create_all(engine)
+    _ensure_linear_walls_schema(engine)
+
+
+def _ensure_linear_walls_schema(engine) -> None:
+    """
+    Add newly introduced nullable columns for existing SQLite databases.
+    This keeps backward compatibility without a migration tool.
+    """
+    with engine.begin() as conn:
+        rows = conn.exec_driver_sql("PRAGMA table_info(linear_walls)").all()
+        if not rows:
+            return
+        existing_cols = {row[1] for row in rows}
+        if "level_from" not in existing_cols:
+            conn.exec_driver_sql("ALTER TABLE linear_walls ADD COLUMN level_from TEXT")
+        if "level_to" not in existing_cols:
+            conn.exec_driver_sql("ALTER TABLE linear_walls ADD COLUMN level_to TEXT")
 
 
 def make_session_factory(engine):
@@ -107,6 +124,8 @@ class LinearWall(Base):
     from_grid: Mapped[str] = mapped_column(String(50), nullable=False)
     to_grid: Mapped[str] = mapped_column(String(50), nullable=False)
     length_mm: Mapped[float] = mapped_column(Float, nullable=False)
+    level_from: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    level_to: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     height_mm: Mapped[float] = mapped_column(Float, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -536,6 +555,8 @@ class DB:
                         "from_grid": r.from_grid,
                         "to_grid": r.to_grid,
                         "length_mm": float(r.length_mm),
+                        "level_from": r.level_from,
+                        "level_to": r.level_to,
                         "height_mm": float(r.height_mm),
                         "notes": r.notes,
                     }
@@ -556,7 +577,9 @@ class DB:
                 from_grid=payload["from_grid"],
                 to_grid=payload["to_grid"],
                 length_mm=float(payload["length_mm"]),
-                height_mm=float(payload["height_mm"]),
+                level_from=payload.get("level_from"),
+                level_to=payload.get("level_to"),
+                height_mm=float(payload.get("height_mm", 0.0) or 0.0),
                 notes=payload.get("notes"),
             )
             s.add(wall)
@@ -571,11 +594,23 @@ class DB:
             if wall is None:
                 raise ValueError(f"Linear wall not found for id={wall_id}")
 
-            for field in ("name", "grid_line", "from_grid", "to_grid", "length_mm", "height_mm", "notes"):
+            for field in (
+                "name",
+                "grid_line",
+                "from_grid",
+                "to_grid",
+                "length_mm",
+                "level_from",
+                "level_to",
+                "height_mm",
+                "notes",
+            ):
                 if field in payload:
                     value = payload[field]
-                    if field in ("length_mm", "height_mm") and value is not None:
+                    if field == "length_mm" and value is not None:
                         value = float(value)
+                    if field == "height_mm":
+                        value = float(value) if value is not None else 0.0
                     setattr(wall, field, value)
 
             wall.updated_at = datetime.utcnow()
